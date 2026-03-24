@@ -1,0 +1,29 @@
+[project]
+name = "nn-merging-experiments"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "stable-baselines3 >=2.3,<3",
+    "gymnasium[mujoco] >=1.0,<2",
+    "torch >=2.0",
+    "numpy",
+    "wandb",
+]
+
+[project.optional-dependencies]
+dev = ["ipython", "matplotlib"]
+
+[project.scripts]
+nn-merge-train = "nn_merge.train:main"
+nn-merge-merge = "nn_merge.merge:main"
+nn-merge-eval = "nn_merge.evaluate:main"
+
+[tool.hatch.build]
+sources = ["src"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nn_merge"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
