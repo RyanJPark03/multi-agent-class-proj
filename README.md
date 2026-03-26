@@ -178,7 +178,7 @@ docker build -t nn-merge .
 Run with GPU support, mounting `models/` so outputs persist on the host:
 
 ```bash
-docker run --gpus all -v $(pwd)/models:/app/models -it nn-merge
+docker run --gpus all --env-file .env -v $(pwd)/models:/app/models -v $(pwd)/experiments:/app/experiments -v $(pwd)/src:/app/src -it nn-merge
 ```
 
 This drops you into a bash shell inside the container. MuJoCo is configured for headless EGL rendering automatically. Run `wandb login` inside the container to enable logging.

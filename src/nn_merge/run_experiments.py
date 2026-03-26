@@ -1,8 +1,9 @@
 import argparse
+import os
+import signal
 import subprocess
 import sys
 import threading
-from pathlib import Path
 
 import yaml
 
@@ -25,13 +26,13 @@ def get_available_gpus() -> list[int]:
         return []
 
 
-def build_train_command(experiment: dict, defaults: dict) -> list[str]:
+def build_train_command(experiment: dict, defaults: dict, output_dir: str) -> list[str]:
     """Build a `python -m nn_merge.train` command from experiment config."""
     cfg = {**defaults, **experiment}
     cmd = [sys.executable, "-m", "nn_merge.train"]
 
     name = cfg.get("name", f"{cfg.get('reward', 'default')}_seed{cfg.get('seed', 0)}")
-    save_path = cfg.get("save_path", f"models/{name}")
+    save_path = cfg.get("save_path", f"{output_dir}/{name}")
 
     cmd.extend(["--save-path", save_path])
     cmd.extend(["--seed", str(cfg.get("seed", 0))])
@@ -61,29 +62,51 @@ def build_train_command(experiment: dict, defaults: dict) -> list[str]:
     return cmd
 
 
-def stream_output(proc: subprocess.Popen, label: str):
-    """Stream process stdout with a prefix label."""
-    for line in iter(proc.stdout.readline, ""):
-        print(f"[{label}] {line}", end="", flush=True)
+# Track all running processes for cleanup on Ctrl+C
+_active_procs: list[subprocess.Popen] = []
+_lock = threading.Lock()
 
 
 def run_experiment(cmd: list[str], label: str, gpu: str | None, semaphore: threading.Semaphore):
     """Run a single experiment subprocess."""
     env = None
     if gpu is not None:
-        import os
         env = {**os.environ, "CUDA_VISIBLE_DEVICES": gpu}
 
     with semaphore:
-        print(f"[{label}] Starting (GPU={gpu or 'auto'}): {' '.join(cmd)}")
+        print(f"[{label}] Starting (GPU={gpu or 'auto'})")
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, env=env,
         )
-        stream_output(proc, label)
-        proc.wait()
+        with _lock:
+            _active_procs.append(proc)
+
+        try:
+            for line in iter(proc.stdout.readline, ""):
+                line = line.rstrip()
+                # Only print summary lines, skip verbose SB3 table formatting
+                if line.startswith("|") or line.startswith("-") or not line:
+                    continue
+                print(f"[{label}] {line}", flush=True)
+            proc.wait()
+        finally:
+            with _lock:
+                if proc in _active_procs:
+                    _active_procs.remove(proc)
+
         status = "DONE" if proc.returncode == 0 else f"FAILED (exit {proc.returncode})"
         print(f"[{label}] {status}")
+
+
+def kill_all():
+    """Kill all active child processes."""
+    with _lock:
+        for proc in _active_procs:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
 
 
 def main():
@@ -91,7 +114,11 @@ def main():
     parser.add_argument("--config", type=str, required=True, help="Path to YAML experiment config")
     parser.add_argument("--max-parallel", type=int, default=None,
                         help="Max concurrent experiments (default: number of experiments)")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Show full SB3 training output")
     args = parser.parse_args()
+
+    from pathlib import Path
 
     with open(args.config) as f:
         config = yaml.safe_load(f)
@@ -99,26 +126,43 @@ def main():
     defaults = config.get("defaults", {})
     experiments = config["experiments"]
 
+    # Output dir: models/<yaml filename without extension>
+    config_stem = Path(args.config).stem
+    output_dir = f"models/{config_stem}"
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
     max_parallel = args.max_parallel or len(experiments)
     semaphore = threading.Semaphore(max_parallel)
 
-    # Assign GPUs round-robin
-    gpus = get_available_gpus()
+    # Assign GPUs round-robin (only if any experiment uses cuda)
+    all_devices = [
+        {**defaults, **exp}.get("device", "cpu") for exp in experiments
+    ]
+    gpus = get_available_gpus() if any(d != "cpu" for d in all_devices) else []
+
+    print(f"Running {len(experiments)} experiments (max parallel: {max_parallel})")
+    print(f"Output directory: {output_dir}/")
 
     threads = []
     for i, exp in enumerate(experiments):
         label = exp.get("name", f"exp_{i}")
-        cmd = build_train_command(exp, defaults)
-        gpu = str(gpus[i % len(gpus)]) if gpus else None
+        cmd = build_train_command(exp, defaults, output_dir)
+        device = {**defaults, **exp}.get("device", "cpu")
+        gpu = str(gpus[i % len(gpus)]) if gpus and device != "cpu" else None
 
-        t = threading.Thread(target=run_experiment, args=(cmd, label, gpu, semaphore))
+        t = threading.Thread(target=run_experiment, args=(cmd, label, gpu, semaphore),
+                             daemon=True)
         t.start()
         threads.append(t)
 
-    for t in threads:
-        t.join()
-
-    print("\nAll experiments complete.")
+    try:
+        for t in threads:
+            t.join()
+        print("\nAll experiments complete.")
+    except KeyboardInterrupt:
+        print("\nInterrupted — stopping all experiments...")
+        kill_all()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

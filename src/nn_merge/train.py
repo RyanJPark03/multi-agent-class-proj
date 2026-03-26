@@ -74,7 +74,9 @@ def main():
             pass
         reward_kwargs[key] = val
 
-    if args.gpu is not None:
+    if args.device == "cpu":
+        pass  # no GPU needed
+    elif args.gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
     elif "CUDA_VISIBLE_DEVICES" not in os.environ:
         auto_select_gpus()
