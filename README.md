@@ -44,6 +44,50 @@ Training metrics are logged to Weights & Biases. Use `--no-wandb` to disable.
 | `--wandb-project` | `nn-merge` | W&B project name |
 | `--run-name` | auto | W&B run name |
 | `--no-wandb` | off | Disable W&B logging |
+| `--reward-kwargs` | none | Reward wrapper params (e.g. `speed_target=3.0`) |
+
+A `_params.txt` file with model parameter summary is saved alongside each model after training.
+
+### Inspect
+
+Inspect a trained model's parameters:
+
+```bash
+python -m nn_merge.inspect_model --model models/ant-v5_seed0
+python -m nn_merge.inspect_model --model models/ant-v5_seed0 --layer policy_net
+python -m nn_merge.inspect_model --model models/ant-v5_seed0 --values  # full tensor values
+```
+
+### Experiment Runner
+
+Run multiple experiments in parallel from a YAML config:
+
+```bash
+python -m nn_merge.run_experiments --config experiments/example.yaml
+python -m nn_merge.run_experiments --config experiments/example.yaml --max-parallel 2
+```
+
+Each experiment runs as a separate process with its own GPU assigned automatically. See `experiments/example.yaml` for the config format:
+
+```yaml
+defaults:
+  env_id: Ant-v5
+  timesteps: 2000000
+  hidden_size: 64
+
+experiments:
+  - name: fast_ant
+    reward: forward_target
+    reward_kwargs:
+      speed_target: 3.0
+    seed: 0
+
+  - name: spinner
+    reward: spin
+    seed: 0
+```
+
+The `defaults` section provides base values that individual experiments can override.
 
 ### Merge
 
@@ -88,8 +132,15 @@ Reward wrappers live in `src/nn_merge/envs/rewards.py`. Built-in options:
 |---|---|
 | `default` | Ant-v5's built-in reward (forward velocity + survival - control cost) |
 | `forward` | Pure forward velocity, no penalties |
+| `forward_target` | Reward proximity to target speed, penalize torque. kwargs: `speed_target`, `torque_penalty` |
 | `spin` | Angular velocity around z-axis |
-| `energy_efficient` | Target moderate speed, penalize large torques |
+| `energy_efficient` | Target moderate speed, penalize large torques. kwargs: `speed_target`, `torque_penalty` |
+
+Reward wrappers that accept kwargs can be configured from the CLI:
+
+```bash
+python -m nn_merge.train --reward forward_target --reward-kwargs speed_target=3.0 torque_penalty=0.05
+```
 
 To add a new reward, subclass `gymnasium.RewardWrapper` in `rewards.py` and add it to the `REWARDS` dict:
 
@@ -136,15 +187,19 @@ This drops you into a bash shell inside the container. MuJoCo is configured for 
 
 ```
 ├── src/nn_merge/
-│   ├── train.py           # PPO training script
-│   ├── merge.py           # Model merging script
-│   ├── evaluate.py        # Evaluation script
+│   ├── train.py              # PPO training script
+│   ├── merge.py              # Model merging script
+│   ├── evaluate.py           # Evaluation script
+│   ├── inspect_model.py      # Parameter inspection
+│   ├── run_experiments.py    # Parallel experiment runner
 │   ├── envs/
-│   │   ├── __init__.py    # make_env() factory
-│   │   └── rewards.py     # Custom reward wrappers
+│   │   ├── __init__.py       # make_env() factory
+│   │   └── rewards.py        # Custom reward wrappers
 │   └── merging/
-│       └── strategies.py  # Merge strategy implementations
-├── scripts/               # Shell wrappers
+│       └── strategies.py     # Merge strategy implementations
+├── experiments/              # YAML experiment configs
+│   └── example.yaml
+├── scripts/                  # Shell wrappers
 ├── Dockerfile
 └── pyproject.toml
 ```

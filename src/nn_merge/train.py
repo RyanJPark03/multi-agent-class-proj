@@ -58,7 +58,21 @@ def main():
     parser.add_argument("--wandb-project", type=str, default="nn-merge")
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--no-wandb", action="store_true")
+    parser.add_argument("--reward-kwargs", nargs="*", default=[],
+                        help="Reward wrapper kwargs as key=value pairs (e.g. speed_target=3.0)")
+    parser.add_argument("--device", type=str, default="cpu",
+                        help="Device for training: cpu, cuda, or auto")
     args = parser.parse_args()
+
+    # Parse reward kwargs
+    reward_kwargs = {}
+    for kv in args.reward_kwargs:
+        key, val = kv.split("=", 1)
+        try:
+            val = float(val)
+        except ValueError:
+            pass
+        reward_kwargs[key] = val
 
     if args.gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
@@ -80,13 +94,15 @@ def main():
             config={
                 "env_id": args.env_id,
                 "reward": args.reward,
+                "reward_kwargs": reward_kwargs,
                 "seed": args.seed,
                 "timesteps": args.timesteps,
                 "hidden_size": args.hidden_size,
+                "device": args.device,
             },
         )
 
-    env = make_env(args.env_id, args.reward)
+    env = make_env(args.env_id, args.reward, **reward_kwargs)
     policy_kwargs = dict(
         net_arch=dict(
             pi=[args.hidden_size, args.hidden_size],
@@ -98,6 +114,7 @@ def main():
         env,
         policy_kwargs=policy_kwargs,
         seed=args.seed,
+        device=args.device,
         verbose=1,
     )
 
@@ -105,6 +122,12 @@ def main():
     model.learn(total_timesteps=args.timesteps, callback=callback)
     model.save(save_path)
     print(f"Model saved to {save_path}.zip")
+
+    # Save parameter summary
+    from nn_merge.inspect_model import save_param_summary
+    param_path = f"{save_path}_params.txt"
+    save_param_summary(save_path, param_path)
+    print(f"Parameter summary saved to {param_path}")
 
     if use_wandb:
         wandb.finish()
