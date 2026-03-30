@@ -19,3 +19,7 @@ def weight_average(
     for key in state_dicts[0]:
         merged[key] = torch.stack([sd[key] for sd in state_dicts]).mean(dim=0)
     return merged
+
+MERGE_STRATEGIES: dict[str, MergeStrategy] = {
+    "weight_average": weight_average,
+}
