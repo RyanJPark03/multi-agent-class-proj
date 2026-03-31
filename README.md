@@ -212,16 +212,16 @@ Then use it with `python -m nn_merge.merge --strategy my_strategy`.
 Build the image:
 
 ```bash
-docker build -t nn-merge .
+docker compose build
 ```
 
 Run with GPU support, mounting `models/` so outputs persist on the host:
 
 ```bash
-docker run --gpus all --env-file .env -v $(pwd)/models:/app/models -v $(pwd)/experiments:/app/experiments -v $(pwd)/src:/app/src -it nn-merge
+docker compose run --rm nn-merge
 ```
 
-This drops you into a bash shell inside the container. MuJoCo is configured for headless EGL rendering automatically. Run `wandb login` inside the container to enable logging.
+This drops you into a bash shell inside the container with all default flags and mounts applied (`--gpus all`, `--env-file .env`, and volume mounts for `models/`, `experiments/`, and `src/`). MuJoCo is configured for headless EGL rendering automatically. Run `wandb login` inside the container to enable logging.
 
 ## Project Structure
 
