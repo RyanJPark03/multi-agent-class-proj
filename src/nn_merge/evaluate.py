@@ -1,16 +1,26 @@
 import argparse
+from pathlib import Path
 
 import gymnasium as gym
 from gymnasium.wrappers import RecordVideo
 from stable_baselines3 import PPO
 from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.monitor import Monitor
 
 from nn_merge.envs import make_env
+from nn_merge.eval_cache import (
+    DEFAULT_CACHE_PATH,
+    get_entry,
+    load_cache,
+    make_model_key,
+    save_cache,
+    set_entry,
+)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate a trained model")
-    parser.add_argument("--model", type=str, required=True)
+    parser.add_argument("--model", type=str, default="models/fast_and_slow_ants/fast_ant.zip")
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--env-id", type=str, default="Ant-v5")
     parser.add_argument("--reward", type=str, default="default",
@@ -18,30 +28,73 @@ def main():
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--record", action="store_true",
                         help="Record MP4 videos (works headless)")
-    parser.add_argument("--video-dir", type=str, default="models/videos",
-                        help="Directory to save recorded videos")
+    parser.add_argument("--video-dir", type=str, default=None,
+                        help="Directory to save recorded videos "
+                             "(default: <model_dir>/<model_stem>_eval_videos)")
+    parser.add_argument("--no-early-termination", action="store_true",
+                        help="Disable terminate_when_unhealthy so episodes run "
+                             "to the time limit (useful for fast/unstable policies)")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--cache", type=str, default=DEFAULT_CACHE_PATH)
+    parser.add_argument("--no-cache", action="store_true")
     args = parser.parse_args()
 
+    if args.record and args.video_dir is None:
+        model_path = Path(args.model)
+        args.video_dir = str(model_path.parent / (model_path.stem + "_eval_videos"))
+
+    env_kwargs = {}
+    if args.no_early_termination:
+        env_kwargs["terminate_when_unhealthy"] = False
+
     if args.render:
-        env = gym.make(args.env_id, render_mode="human")
+        env = gym.make(args.env_id, render_mode="human", **env_kwargs)
+        env = Monitor(env)
+        model = PPO.load(args.model, device="cpu")
+        mean_reward, std_reward = evaluate_policy(
+            model, env, n_eval_episodes=args.episodes, deterministic=True
+        )
+        print(f"Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
+
     elif args.record:
-        env = gym.make(args.env_id, render_mode="rgb_array")
+        env = gym.make(args.env_id, render_mode="rgb_array", **env_kwargs)
+        env = Monitor(env)
         env = RecordVideo(env, video_folder=args.video_dir,
                           episode_trigger=lambda _: True)
-    else:
-        env = make_env(args.env_id, args.reward)
-
-    model = PPO.load(args.model)
-
-    mean_reward, std_reward = evaluate_policy(
-        model, env, n_eval_episodes=args.episodes, deterministic=True
-    )
-    print(f"Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
-
-    if args.record:
+        model = PPO.load(args.model, device="cpu")
+        mean_reward, std_reward = evaluate_policy(
+            model, env, n_eval_episodes=args.episodes, deterministic=True
+        )
+        print(f"Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
         env.close()
         print(f"Videos saved to {args.video_dir}/")
+
+    else:
+        cache_key = make_model_key(args.model, args.reward, args.seed)
+        episode_rewards = None
+
+        if not args.no_cache:
+            cache = load_cache(args.cache)
+            episode_rewards = get_entry(cache, cache_key)
+            if episode_rewards is not None:
+                print(f"Cache hit (seed={args.seed}, {len(episode_rewards)} episodes)")
+
+        if episode_rewards is None:
+            env = make_env(args.env_id, args.reward, **env_kwargs)
+            env = Monitor(env)
+            env.reset(seed=args.seed)
+            model = PPO.load(args.model, device="cpu")
+            episode_rewards, _ = evaluate_policy(
+                model, env, n_eval_episodes=args.episodes,
+                deterministic=True, return_episode_rewards=True,
+            )
+            if not args.no_cache:
+                set_entry(cache, cache_key, episode_rewards, args.model, args.reward, args.seed)
+                save_cache(cache, args.cache)
+
+        mean_reward = sum(episode_rewards) / len(episode_rewards)
+        std_reward = (sum((r - mean_reward) ** 2 for r in episode_rewards) / len(episode_rewards)) ** 0.5
+        print(f"Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
 
 
 if __name__ == "__main__":

@@ -122,7 +122,46 @@ python -m nn_merge.evaluate --model models/ant-v5_seed0 --record
 | `--render` | off | Live GUI rendering (requires display) |
 | `--record` | off | Save MP4 videos to `--video-dir` |
 | `--video-dir` | `models/videos` | Directory for recorded videos |
-| `--seed` | `0` | Eval seed |
+| `--seed` | `0` | Eval environment seed (observation noise) |
+| `--cache` | `models/eval_cache.json` | Path to evaluation cache |
+| `--no-cache` | off | Skip cache read/write |
+
+Results are cached by `(model, reward, seed)` — re-running the same combination skips evaluation.
+
+### Plot
+
+Evaluate models across rewards and seeds, then produce a violin plot:
+
+```bash
+python -m nn_merge.plot \
+  --models models/my_exp/ant_model1 models/my_exp/ant_model2 \
+  --rewards forward spin default \
+  --eval-seeds 0 1 2 3 4 \
+  --output models/eval_plot.png
+```
+
+Rewards that take kwargs can be specified inline using `name:key=value` syntax:
+
+```bash
+python -m nn_merge.plot \
+  --models models/fast_and_slow_ants/fast_ant.zip models/fast_and_slow_ants/slow_ant.zip \
+  --rewards "forward_target:speed_target=1.25" "forward_target:speed_target=2.0" \
+  --output models/merge_comparison.png
+```
+
+Models with the same base name (e.g. `fast_ant_seed0`, `fast_ant_seed1` → `fast_ant`) are grouped into one violin. Each column is a different reward. A merged model (weight average by default) is shown as a separate violin on the right.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--models` | (required) | Paths to saved models |
+| `--rewards` | `default` | Reward specs: `name` or `name:key=val,key=val` |
+| `--strategies` | `weight_average` | Merge strategies to include |
+| `--eval-seeds` | `0 1 2 3 4` | Eval seeds (determine violin distribution) |
+| `--episodes` | `20` | Episodes per (model, reward, seed) |
+| `--env-id` | `Ant-v5` | Gymnasium environment |
+| `--cache` | `models/eval_cache.json` | Shared eval cache |
+| `--output` | `models/eval_plot.png` | Figure save path |
+| `--no-cache` | off | Skip cache |
 
 ## Custom Rewards
 
@@ -189,7 +228,9 @@ This drops you into a bash shell inside the container. MuJoCo is configured for 
 ├── src/nn_merge/
 │   ├── train.py              # PPO training script
 │   ├── merge.py              # Model merging script
-│   ├── evaluate.py           # Evaluation script
+│   ├── evaluate.py           # Evaluation script (cached)
+│   ├── plot.py               # Violin plot across models/rewards
+│   ├── eval_cache.py         # Eval result cache (JSON)
 │   ├── inspect_model.py      # Parameter inspection
 │   ├── run_experiments.py    # Parallel experiment runner
 │   ├── envs/
