@@ -161,6 +161,7 @@ Models with the same base name (e.g. `fast_ant_seed0`, `fast_ant_seed1` → `fas
 | `--env-id` | `Ant-v5` | Gymnasium environment |
 | `--cache` | `models/eval_cache.json` | Shared eval cache |
 | `--output` | `models/eval_plot.png` | Figure save path |
+| `--merged-save-dir` | none | Save merged model(s) as `<dir>/merged_<strategy>.zip` |
 | `--no-cache` | off | Skip cache |
 
 ## Custom Rewards

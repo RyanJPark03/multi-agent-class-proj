@@ -72,10 +72,11 @@ def main():
     else:
         cache_key = make_model_key(args.model, args.reward, args.seed)
         episode_rewards = None
+        episode_lengths = None
 
         if not args.no_cache:
             cache = load_cache(args.cache)
-            episode_rewards = get_entry(cache, cache_key)
+            episode_rewards, episode_lengths = get_entry(cache, cache_key)
             if episode_rewards is not None:
                 print(f"Cache hit (seed={args.seed}, {len(episode_rewards)} episodes)")
 
@@ -84,17 +85,22 @@ def main():
             env = Monitor(env)
             env.reset(seed=args.seed)
             model = PPO.load(args.model, device="cpu")
-            episode_rewards, _ = evaluate_policy(
+            episode_rewards, episode_lengths = evaluate_policy(
                 model, env, n_eval_episodes=args.episodes,
                 deterministic=True, return_episode_rewards=True,
             )
             if not args.no_cache:
-                set_entry(cache, cache_key, episode_rewards, args.model, args.reward, args.seed)
+                set_entry(cache, cache_key, episode_rewards, args.model, args.reward, args.seed,
+                          episode_lengths=episode_lengths)
                 save_cache(cache, args.cache)
 
         mean_reward = sum(episode_rewards) / len(episode_rewards)
         std_reward = (sum((r - mean_reward) ** 2 for r in episode_rewards) / len(episode_rewards)) ** 0.5
         print(f"Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
+        if episode_lengths:
+            mean_len = sum(episode_lengths) / len(episode_lengths)
+            std_len = (sum((l - mean_len) ** 2 for l in episode_lengths) / len(episode_lengths)) ** 0.5
+            print(f"Mean length: {mean_len:.1f} +/- {std_len:.1f}")
 
 
 if __name__ == "__main__":

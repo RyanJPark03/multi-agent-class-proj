@@ -64,22 +64,23 @@ def _run_eval(
     no_cache: bool,
 ) -> list[float]:
     if not no_cache:
-        cached = get_entry(cache, cache_key)
-        if cached is not None:
+        cached_rewards, _ = get_entry(cache, cache_key)
+        if cached_rewards is not None:
             print(f"  Cache hit: {cache_key}")
-            return cached
+            return cached_rewards
 
     env = make_env(env_id, reward_name, **reward_kwargs)
     env = Monitor(env)
     env.reset(seed=seed)
-    rewards, _ = evaluate_policy(
+    rewards, lengths = evaluate_policy(
         model, env, n_eval_episodes=n_episodes,
         deterministic=True, return_episode_rewards=True,
     )
     env.close()
 
     if not no_cache:
-        set_entry(cache, cache_key, rewards, cache_key, reward_name, seed)
+        set_entry(cache, cache_key, rewards, cache_key, reward_name, seed,
+                  episode_lengths=lengths)
 
     return rewards
 
@@ -96,6 +97,9 @@ def main():
     parser.add_argument("--cache", type=str, default=DEFAULT_CACHE_PATH)
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--output", type=str, default="models/eval_plot.png")
+    parser.add_argument("--merged-save-dir", type=str, default=None,
+                        help="Directory to save merged models (e.g. models/my_exp). "
+                             "Each strategy saved as <dir>/merged_<strategy>.zip")
     args = parser.parse_args()
 
     # Parse reward specs into (name, kwargs, label) tuples
@@ -140,10 +144,18 @@ def main():
             continue
         print(f"Merging with {strategy_name}...")
         merged_sd = MERGE_STRATEGIES[strategy_name](state_dicts)
-        # Use first model as shell
-        shell = list(loaded_models.values())[0]
+        # Use first model as shell (copy so later strategies aren't contaminated)
+        import copy
+        shell = copy.deepcopy(list(loaded_models.values())[0])
         shell.policy.load_state_dict(merged_sd)
         group_label = f"merged_{strategy_name}"
+
+        if args.merged_save_dir:
+            save_dir = Path(args.merged_save_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+            save_path = save_dir / f"merged_{strategy_name}"
+            shell.save(str(save_path))
+            print(f"  Merged model saved to {save_path}.zip")
 
         for reward_name, reward_kwargs, reward_label in reward_specs:
             for seed in args.eval_seeds:

@@ -53,9 +53,12 @@ def make_merged_key(source_paths: list[str], strategy: str, reward_name: str, se
     return f"merged:{strategy}:{joined}|{suffix}|seed{seed}"
 
 
-def get_entry(cache: dict, key: str) -> list[float] | None:
+def get_entry(cache: dict, key: str) -> tuple[list[float], list[int]] | tuple[None, None]:
+    """Return (episode_rewards, episode_lengths) or (None, None) on miss."""
     entry = cache.get(key)
-    return entry["episode_rewards"] if entry else None
+    if entry is None:
+        return None, None
+    return entry["episode_rewards"], entry.get("episode_lengths")
 
 
 def set_entry(
@@ -65,12 +68,14 @@ def set_entry(
     model_path: str,
     reward_name: str,
     seed: int,
+    episode_lengths: list[int] | None = None,
 ) -> None:
     cache[key] = {
         "model_path": model_path,
         "reward_name": reward_name,
         "seed": seed,
         "episode_rewards": list(episode_rewards),
+        "episode_lengths": list(episode_lengths) if episode_lengths is not None else None,
         "n_episodes": len(episode_rewards),
         "timestamp": datetime.now().isoformat(),
     }

@@ -24,8 +24,6 @@ nn-merge-eval = "nn_merge.evaluate:main"
 nn-merge-inspect = "nn_merge.inspect_model:main"
 nn-merge-run = "nn_merge.run_experiments:main"
 nn-merge-plot = "nn_merge.plot:main"
-nn-merge-test = "nn_merge.test:main"
-
 [tool.hatch.build]
 sources = ["src"]
 
