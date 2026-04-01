@@ -4,6 +4,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 
 import yaml
 
@@ -58,6 +59,12 @@ def build_train_command(experiment: dict, defaults: dict, output_dir: str) -> li
         cmd.append("--no-wandb")
 
     cmd.extend(["--device", cfg.get("device", "cpu")])
+
+    checkpoint_freq = cfg.get("checkpoint_freq", 0)
+    if checkpoint_freq:
+        cmd.extend(["--checkpoint-freq", str(checkpoint_freq)])
+    if cfg.get("save_wandb_checkpoints", False):
+        cmd.append("--save-wandb-checkpoints")
 
     return cmd
 
@@ -150,10 +157,14 @@ def main():
         device = {**defaults, **exp}.get("device", "cpu")
         gpu = str(gpus[i % len(gpus)]) if gpus and device != "cpu" else None
 
-        t = threading.Thread(target=run_experiment, args=(cmd, label, gpu, semaphore),
+        t = threading.Thread(target=run_experiment,
+                             args=(cmd, label, gpu, semaphore),
                              daemon=True)
         t.start()
         threads.append(t)
+        # Stagger launches so parallel wandb.init() calls don't race
+        if i < len(experiments) - 1:
+            time.sleep(2)
 
     try:
         for t in threads:

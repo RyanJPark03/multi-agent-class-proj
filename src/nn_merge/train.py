@@ -23,6 +23,36 @@ class WandbMetricsCallback(BaseCallback):
         return True
 
 
+class CheckpointCallback(BaseCallback):
+    """Save model checkpoints at regular intervals during training."""
+
+    def __init__(self, save_freq: int, checkpoint_dir: str, save_wandb: bool = False, verbose: int = 0):
+        super().__init__(verbose)
+        self.save_freq = save_freq
+        self.checkpoint_dir = checkpoint_dir
+        self.save_wandb = save_wandb
+
+    def _init_callback(self) -> None:
+        Path(self.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+
+    def _on_step(self) -> bool:
+        if self.num_timesteps % self.save_freq == 0:
+            path = os.path.join(self.checkpoint_dir, f"step_{self.num_timesteps}")
+            self.model.save(path)
+            if self.verbose:
+                print(f"Checkpoint saved: {path}.zip")
+            if self.save_wandb:
+                import wandb
+                artifact = wandb.Artifact(
+                    f"checkpoint-step-{self.num_timesteps}",
+                    type="model",
+                    metadata={"timesteps": self.num_timesteps},
+                )
+                artifact.add_file(f"{path}.zip")
+                wandb.log_artifact(artifact)
+        return True
+
+
 def auto_select_gpus():
     """Pick GPUs with the most free memory. 2 if >4 available, else 1."""
     try:
@@ -62,6 +92,10 @@ def main():
                         help="Reward wrapper kwargs as key=value pairs (e.g. speed_target=3.0)")
     parser.add_argument("--device", type=str, default="cpu",
                         help="Device for training: cpu, cuda, or auto")
+    parser.add_argument("--checkpoint-freq", type=int, default=None,
+                        help="Save a checkpoint every N timesteps (default: timesteps/10)")
+    parser.add_argument("--save-wandb-checkpoints", action="store_true",
+                        help="Upload checkpoints as W&B artifacts")
     args = parser.parse_args()
 
     # Parse reward kwargs
@@ -120,8 +154,19 @@ def main():
         verbose=1,
     )
 
-    callback = WandbMetricsCallback() if use_wandb else None
-    model.learn(total_timesteps=args.timesteps, callback=callback)
+    callbacks = []
+    if use_wandb:
+        callbacks.append(WandbMetricsCallback())
+    checkpoint_freq = args.checkpoint_freq if args.checkpoint_freq is not None else args.timesteps // 10
+    if checkpoint_freq > 0:
+        checkpoint_dir = os.path.join(str(Path(save_path).parent), "checkpoints", Path(save_path).name)
+        callbacks.append(CheckpointCallback(
+            save_freq=checkpoint_freq,
+            checkpoint_dir=checkpoint_dir,
+            save_wandb=args.save_wandb_checkpoints and use_wandb,
+            verbose=1,
+        ))
+    model.learn(total_timesteps=args.timesteps, callback=callbacks or None)
     model.save(save_path)
     print(f"Model saved to {save_path}.zip")
 
