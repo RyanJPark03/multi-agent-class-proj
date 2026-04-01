@@ -1,6 +1,6 @@
 defaults:
   env_id: Ant-v5
-  timesteps: 2000000
+  timesteps: 10000000
   hidden_size: 64
   device: cpu
 

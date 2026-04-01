@@ -1,0 +1,14 @@
+defaults:
+  env_id: HalfCheetah-v5
+  timesteps: 3000000
+  hidden_size: 64
+  device: cpu
+
+experiments:
+  - name: cheetah_0
+    reward: default
+    seed: 0
+
+  - name: cheetah_1
+    reward: default
+    seed: 1
