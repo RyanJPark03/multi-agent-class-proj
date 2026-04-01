@@ -45,8 +45,12 @@ Training metrics are logged to Weights & Biases. Use `--no-wandb` to disable.
 | `--run-name` | auto | W&B run name |
 | `--no-wandb` | off | Disable W&B logging |
 | `--reward-kwargs` | none | Reward wrapper params (e.g. `speed_target=3.0`) |
+| `--checkpoint-freq` | `timesteps/10` | Save a checkpoint every N timesteps (0 to disable) |
+| `--save-wandb-checkpoints` | off | Upload checkpoints as W&B artifacts |
 
 A `_params.txt` file with model parameter summary is saved alongside each model after training.
+
+Checkpoints are saved by default (10 evenly spaced) under `checkpoints/<model_name>/` next to the final model. Use `--save-wandb-checkpoints` to additionally upload each checkpoint as a versioned W&B artifact.
 
 ### Inspect
 
@@ -74,6 +78,7 @@ defaults:
   env_id: Ant-v5
   timesteps: 2000000
   hidden_size: 64
+  checkpoint_freq: 200000  # optional, defaults to timesteps/10
 
 experiments:
   - name: fast_ant
