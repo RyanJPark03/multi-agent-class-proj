@@ -69,7 +69,12 @@ Run multiple experiments in parallel from a YAML config:
 ```bash
 python -m nn_merge.run_experiments --config experiments/example.yaml
 python -m nn_merge.run_experiments --config experiments/example.yaml --max-parallel 2
+
+# Multiple config files — all experiments pooled together
+python -m nn_merge.run_experiments --config experiments/ants.yaml experiments/cheetahs.yaml
 ```
+
+CPU threads are automatically capped to half the machine's cores, split evenly across concurrent experiments.
 
 Each experiment runs as a separate process with its own GPU assigned automatically. See `experiments/example.yaml` for the config format:
 

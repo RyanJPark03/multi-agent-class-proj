@@ -74,14 +74,17 @@ _active_procs: list[subprocess.Popen] = []
 _lock = threading.Lock()
 
 
-def run_experiment(cmd: list[str], label: str, gpu: str | None, semaphore: threading.Semaphore):
+def run_experiment(cmd: list[str], label: str, gpu: str | None, semaphore: threading.Semaphore,
+                   threads_per_exp: int = 1):
     """Run a single experiment subprocess."""
-    env = None
+    env = {**os.environ,
+           "OMP_NUM_THREADS": str(threads_per_exp),
+           "MKL_NUM_THREADS": str(threads_per_exp)}
     if gpu is not None:
-        env = {**os.environ, "CUDA_VISIBLE_DEVICES": gpu}
+        env["CUDA_VISIBLE_DEVICES"] = gpu
 
     with semaphore:
-        print(f"[{label}] Starting (GPU={gpu or 'auto'})")
+        print(f"[{label}] Starting (GPU={gpu or 'auto'}, {threads_per_exp} CPU threads)")
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, env=env,
@@ -118,52 +121,62 @@ def kill_all():
 
 def main():
     parser = argparse.ArgumentParser(description="Run multiple training experiments in parallel")
-    parser.add_argument("--config", type=str, required=True, help="Path to YAML experiment config")
+    parser.add_argument("--config", type=str, nargs="+", required=True,
+                        help="Path(s) to YAML experiment config(s)")
     parser.add_argument("--max-parallel", type=int, default=None,
-                        help="Max concurrent experiments (default: number of experiments)")
+                        help="Max concurrent experiments (default: total number of experiments)")
     parser.add_argument("--verbose", action="store_true",
                         help="Show full SB3 training output")
     args = parser.parse_args()
 
     from pathlib import Path
 
-    with open(args.config) as f:
-        config = yaml.safe_load(f)
+    # Collect experiments from all config files
+    all_jobs: list[tuple[str, list[str]]] = []  # (label, cmd)
+    all_devices_list: list[str] = []
+    for config_path in args.config:
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
 
-    defaults = config.get("defaults", {})
-    experiments = config["experiments"]
+        defaults = config.get("defaults", {})
+        experiments = config["experiments"]
 
-    # Output dir: models/<yaml filename without extension>
-    config_stem = Path(args.config).stem
-    output_dir = f"models/{config_stem}"
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+        config_stem = Path(config_path).stem
+        output_dir = f"models/{config_stem}"
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    max_parallel = args.max_parallel or len(experiments)
+        for exp in experiments:
+            label = exp.get("name", f"{config_stem}_{len(all_jobs)}")
+            cmd = build_train_command(exp, defaults, output_dir)
+            all_jobs.append((label, cmd))
+            all_devices_list.append({**defaults, **exp}.get("device", "cpu"))
+
+    max_parallel = args.max_parallel or len(all_jobs)
     semaphore = threading.Semaphore(max_parallel)
 
-    # Assign GPUs round-robin (only if any experiment uses cuda)
-    all_devices = [
-        {**defaults, **exp}.get("device", "cpu") for exp in experiments
-    ]
-    gpus = get_available_gpus() if any(d != "cpu" for d in all_devices) else []
+    # Limit CPU: half the cores, split evenly across concurrent experiments
+    total_cpus = os.cpu_count() or 1
+    threads_per_exp = max(1, total_cpus // 2 // max_parallel)
 
-    print(f"Running {len(experiments)} experiments (max parallel: {max_parallel})")
-    print(f"Output directory: {output_dir}/")
+    # Assign GPUs round-robin (only if any experiment uses cuda)
+    gpus = get_available_gpus() if any(d != "cpu" for d in all_devices_list) else []
+
+    print(f"Running {len(all_jobs)} experiments from {len(args.config)} config(s) "
+          f"(max parallel: {max_parallel}, {threads_per_exp} CPU threads/exp, "
+          f"{total_cpus} cores total)")
 
     threads = []
-    for i, exp in enumerate(experiments):
-        label = exp.get("name", f"exp_{i}")
-        cmd = build_train_command(exp, defaults, output_dir)
-        device = {**defaults, **exp}.get("device", "cpu")
+    for i, (label, cmd) in enumerate(all_jobs):
+        device = all_devices_list[i]
         gpu = str(gpus[i % len(gpus)]) if gpus and device != "cpu" else None
 
         t = threading.Thread(target=run_experiment,
-                             args=(cmd, label, gpu, semaphore),
+                             args=(cmd, label, gpu, semaphore, threads_per_exp),
                              daemon=True)
         t.start()
         threads.append(t)
         # Stagger launches so parallel wandb.init() calls don't race
-        if i < len(experiments) - 1:
+        if i < len(all_jobs) - 1:
             time.sleep(2)
 
     try:
