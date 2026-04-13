@@ -52,6 +52,14 @@ def _group_name(model_path: str) -> str:
     return re.sub(r"_seed\d+$", "", stem)
 
 
+def parse_model_spec(spec: str) -> tuple[str, str]:
+    """Parse 'path' or 'name=path' into (label, path)."""
+    if "=" in spec:
+        name, path = spec.split("=", 1)
+        return name, path
+    return _group_name(spec), spec
+
+
 def _run_eval(
     model: PPO,
     env_id: str,
@@ -87,7 +95,9 @@ def _run_eval(
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate models and plot violin comparisons")
-    parser.add_argument("--models", nargs="+", required=True)
+    parser.add_argument("--models", nargs="+", required=True,
+                        help="Model paths. Optional 'name=path' syntax to label "
+                             "(e.g. fast=models/exp/step_500000.zip)")
     parser.add_argument("--rewards", nargs="+", default=["default"],
                         help="Reward specs: 'name' or 'name:key=val,key=val'")
     parser.add_argument("--strategies", nargs="+", default=["weight_average"])
@@ -97,6 +107,9 @@ def main():
     parser.add_argument("--cache", type=str, default=DEFAULT_CACHE_PATH)
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--output", type=str, default="models/eval_plot.png")
+    parser.add_argument("--outlier-sidecar", type=str, default=None,
+                        help="Path to outlier sidecar JSON (see nn_merge.outliers). "
+                             "Filters episode rewards by per-(group,reward) min/max bounds.")
     parser.add_argument("--merged-save-dir", type=str, default=None,
                         help="Directory to save merged models (e.g. models/my_exp). "
                              "Each strategy saved as <dir>/merged_<strategy>.zip")
@@ -115,17 +128,14 @@ def main():
     results: dict[str, dict[str, list[float]]] = {r[2]: {} for r in reward_specs}
 
     # --- Evaluate individual models ---
+    model_specs = [parse_model_spec(s.strip()) for s in args.models if s.strip()]
     loaded_models: dict[str, PPO] = {}
-    for model_path in args.models:
-        model_path = model_path.strip()
-        if not model_path:
-            continue
+    for label, model_path in model_specs:
         if not Path(model_path).exists() and not Path(model_path + ".zip").exists():
             raise FileNotFoundError(f"Model not found: {model_path!r}")
-        print(f"Evaluating {model_path}...")
+        print(f"Evaluating {label} ({model_path})...")
         model = PPO.load(model_path, device="cpu")
-        loaded_models[model_path] = model
-        group = _group_name(model_path)
+        loaded_models[label] = model
 
         for reward_name, reward_kwargs, reward_label in reward_specs:
             for seed in args.eval_seeds:
@@ -134,7 +144,7 @@ def main():
                     model, args.env_id, reward_name, reward_kwargs, seed,
                     args.episodes, cache, key, args.no_cache,
                 )
-                results[reward_label].setdefault(group, []).extend(rewards)
+                results[reward_label].setdefault(label, []).extend(rewards)
 
     # --- Merge and evaluate ---
     state_dicts = [m.policy.state_dict() for m in loaded_models.values()]
@@ -159,7 +169,7 @@ def main():
 
         for reward_name, reward_kwargs, reward_label in reward_specs:
             for seed in args.eval_seeds:
-                key = make_merged_key(args.models, strategy_name, reward_name, seed, reward_kwargs)
+                key = make_merged_key([p for _, p in model_specs], strategy_name, reward_name, seed, reward_kwargs)
                 rewards = _run_eval(
                     shell, args.env_id, reward_name, reward_kwargs, seed,
                     args.episodes, cache, key, args.no_cache,
@@ -168,6 +178,19 @@ def main():
 
     if not args.no_cache:
         save_cache(cache, args.cache)
+
+    # --- Apply outlier sidecar ---
+    if args.outlier_sidecar:
+        from nn_merge.outliers import apply_sidecar, load_sidecar
+        sidecar = load_sidecar(args.outlier_sidecar)
+        for reward_label, group_dict in results.items():
+            for group_label, rewards in group_dict.items():
+                bounds = sidecar.get(f"{group_label}|{reward_label}")
+                if bounds:
+                    before = len(rewards)
+                    group_dict[group_label] = apply_sidecar(rewards, bounds)
+                    after = len(group_dict[group_label])
+                    print(f"  outlier filter [{group_label}|{reward_label}]: {before} → {after}")
 
     # --- Plot ---
     n_cols = len(reward_specs)
