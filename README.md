@@ -161,6 +161,16 @@ python -m nn_merge.plot \
 
 Models with the same base name (e.g. `fast_ant_seed0`, `fast_ant_seed1` → `fast_ant`) are grouped into one violin. Each column is a different reward. A merged model (weight average by default) is shown as a separate violin on the right.
 
+To label models explicitly (useful when comparing checkpoints whose filenames are identical, like `step_500000.zip` from different runs), use `name=path` syntax:
+
+```bash
+python -m nn_merge.plot \
+  --models fast=models/fast_ant/checkpoints/step_500000.zip \
+           slow=models/slow_ant/checkpoints/step_500000.zip \
+  --rewards "forward_target:speed_target=1.25" "forward_target:speed_target=2.0" \
+  --output models/merge_comparison.png
+```
+
 | Argument | Default | Description |
 |---|---|---|
 | `--models` | (required) | Paths to saved models |
@@ -172,7 +182,45 @@ Models with the same base name (e.g. `fast_ant_seed0`, `fast_ant_seed1` → `fas
 | `--cache` | `models/eval_cache.json` | Shared eval cache |
 | `--output` | `models/eval_plot.png` | Figure save path |
 | `--merged-save-dir` | none | Save merged model(s) as `<dir>/merged_<strategy>.zip` |
+| `--outlier-sidecar` | none | JSON file of per-group min/max bounds (see Outliers) |
 | `--no-cache` | off | Skip cache |
+
+### Outliers
+
+Set per-group min/max bounds to filter outliers from the plot. The tool reads
+cached episode rewards (no re-evaluation) and edits a sidecar JSON file via
+CLI subcommands:
+
+```bash
+# 1. Inspect — prints n / min / p5 / p50 / p95 / max / mean / std per group
+python -m nn_merge.outliers stats \
+  --models fast=models/fast_and_slow_ants/fast_ant.zip \
+           slow=models/fast_and_slow_ants/slow_ant.zip \
+  --rewards "forward_target:speed_target=1.25" "forward_target:speed_target=2.0"
+
+# 2. Set bounds for one (group, reward) combo
+python -m nn_merge.outliers set "fast|forward_target:speed_target=1.25" \
+  --min 100 --max 600
+
+# 3. Show / clear entries
+python -m nn_merge.outliers show
+python -m nn_merge.outliers clear "fast|forward_target:speed_target=1.25"
+```
+
+`stats` re-prints existing bounds and shows how many episodes each filter would
+drop, so you can iterate. The sidecar is a plain JSON file (default
+`models/eval_outliers.json`) and can also be hand-edited:
+
+```json
+{
+  "fast|forward_target:speed_target=1.25": {"min": 100.0, "max": 600.0},
+  "merged_weight_average|forward_target:speed_target=2.0": {"max": 800.0}
+}
+```
+
+Keys are `"<group_label>|<reward_label>"` — the same labels shown on the plot.
+Either bound is optional. Pass `--outlier-sidecar models/eval_outliers.json` to
+`nn_merge.plot` to apply the filter when rendering.
 
 ## Custom Rewards
 
@@ -241,6 +289,7 @@ This drops you into a bash shell inside the container with all default flags and
 │   ├── merge.py              # Model merging script
 │   ├── evaluate.py           # Evaluation script (cached)
 │   ├── plot.py               # Violin plot across models/rewards
+│   ├── outliers.py           # Interactive outlier sidecar editor
 │   ├── eval_cache.py         # Eval result cache (JSON)
 │   ├── inspect_model.py      # Parameter inspection
 │   ├── run_experiments.py    # Parallel experiment runner
