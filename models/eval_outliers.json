@@ -1,0 +1,10 @@
+{
+  "merged_weight_average|forward_target:speed_target=1.25": {
+    "min": -150.0,
+    "max": 0.0
+  },
+  "merged_weight_average|forward_target:speed_target=2.0": {
+    "min": -350.0,
+    "max": 0.0
+  }
+}
