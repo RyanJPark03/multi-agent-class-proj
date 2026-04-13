@@ -22,11 +22,11 @@ class ForwardTarget(gym.RewardWrapper):
     def step(self, action):
         obs, _, terminated, truncated, info = self.env.step(action)
         forward_velocity = info.get("x_velocity", 0.0)
-        # Reward being close to target speed, penalize deviation
         speed_reward = -abs(forward_velocity - self.speed_target)
-        # Penalize control effort
         torque_cost = self.torque_penalty * np.sum(np.square(action))
-        reward = speed_reward - torque_cost
+        contact_reward = info.get("reward_contact", 0.0)
+        
+        reward = speed_reward - torque_cost + contact_reward + 1.0
         return obs, reward, terminated, truncated, info
 
 class ForwardReward(gym.RewardWrapper):
@@ -65,7 +65,8 @@ class EnergyEfficientReward(gym.RewardWrapper):
         speed_reward = -abs(forward_velocity - self.speed_target)
         # Penalize control effort
         torque_cost = self.torque_penalty * np.sum(np.square(action))
-        reward = speed_reward - torque_cost
+        # Match Ant-v5's healthy_reward so the agent isn't incentivized to terminate early
+        reward = speed_reward - torque_cost + 1.0
         return obs, reward, terminated, truncated, info
 
 
