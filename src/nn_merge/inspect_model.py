@@ -1,7 +1,7 @@
 import argparse
 
 import torch
-from stable_baselines3 import PPO
+from nn_merge.utils import load_model
 
 
 def format_param_summary(state_dict: dict[str, torch.Tensor], layer_filter: str | None = None) -> str:
@@ -29,7 +29,7 @@ def format_param_summary(state_dict: dict[str, torch.Tensor], layer_filter: str 
 
 
 def save_param_summary(model_path: str, save_path: str, layer_filter: str | None = None):
-    model = PPO.load(model_path)
+    model = load_model(model_path)
     summary = format_param_summary(model.policy.state_dict(), layer_filter)
     with open(save_path, "w") as f:
         f.write(summary + "\n")
@@ -44,7 +44,7 @@ def main():
                         help="Print full parameter values (can be very long)")
     args = parser.parse_args()
 
-    model = PPO.load(args.model)
+    model = load_model(args.model)
     sd = model.policy.state_dict()
 
     print(format_param_summary(sd, args.layer))

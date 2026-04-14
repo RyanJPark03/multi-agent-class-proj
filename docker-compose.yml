@@ -3,17 +3,17 @@ services:
     build: .
     image: nn-merge
     stdin_open: true # equivalent to -i
-    tty: true        # equivalent to -t
+    tty: true # equivalent to -t
     env_file:
       - .env
     volumes:
       - ./models:/app/models
       - ./experiments:/app/experiments
       - ./src:/app/src
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]

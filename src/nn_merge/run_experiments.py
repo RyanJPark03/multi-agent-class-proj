@@ -1,4 +1,5 @@
 import argparse
+from dotenv import load_dotenv
 import os
 import signal
 import subprocess
@@ -59,6 +60,8 @@ def build_train_command(experiment: dict, defaults: dict, output_dir: str) -> li
         cmd.append("--no-wandb")
 
     cmd.extend(["--device", cfg.get("device", "cpu")])
+    if cfg.get("algo"):
+        cmd.extend(["--algo", cfg["algo"]])
 
     checkpoint_freq = cfg.get("checkpoint_freq", 0)
     if checkpoint_freq:
@@ -120,6 +123,10 @@ def kill_all():
 
 
 def main():
+    load_dotenv()
+    if "MUJOCO_GL" not in os.environ:
+        os.environ["MUJOCO_GL"] = "egl"
+
     parser = argparse.ArgumentParser(description="Run multiple training experiments in parallel")
     parser.add_argument("--config", type=str, nargs="+", required=True,
                         help="Path(s) to YAML experiment config(s)")

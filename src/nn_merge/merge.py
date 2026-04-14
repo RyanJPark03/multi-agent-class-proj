@@ -1,8 +1,7 @@
 import argparse
 
-from stable_baselines3 import PPO
-
 import nn_merge.merging.strategies as strategies
+from nn_merge.utils import load_model
 
 
 def main():
@@ -16,7 +15,7 @@ def main():
 
     strategy_fn = getattr(strategies, args.strategy)
 
-    models = [PPO.load(path) for path in args.models]
+    models = [load_model(path) for path in args.models]
     state_dicts = [m.policy.state_dict() for m in models]
 
     merged_sd = strategy_fn(state_dicts)

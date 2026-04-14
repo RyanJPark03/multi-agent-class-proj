@@ -1,9 +1,10 @@
 import argparse
+from dotenv import load_dotenv
 import os
 import subprocess
 from pathlib import Path
 
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.callbacks import BaseCallback
 
 from nn_merge.envs import make_env
@@ -75,6 +76,10 @@ def auto_select_gpus():
 
 
 def main():
+    load_dotenv()
+    if "MUJOCO_GL" not in os.environ:
+        os.environ["MUJOCO_GL"] = "egl"
+
     parser = argparse.ArgumentParser(description="Train a PPO agent on a MuJoCo task")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--timesteps", type=int, default=1_000_000)
@@ -90,12 +95,14 @@ def main():
     parser.add_argument("--no-wandb", action="store_true")
     parser.add_argument("--reward-kwargs", nargs="*", default=[],
                         help="Reward wrapper kwargs as key=value pairs (e.g. speed_target=3.0)")
-    parser.add_argument("--device", type=str, default="cpu",
+    parser.add_argument("--device", type=str, default="auto",
                         help="Device for training: cpu, cuda, or auto")
     parser.add_argument("--checkpoint-freq", type=int, default=None,
                         help="Save a checkpoint every N timesteps (default: timesteps/10)")
     parser.add_argument("--save-wandb-checkpoints", action="store_true",
                         help="Upload checkpoints as W&B artifacts")
+    parser.add_argument("--algo", type=str, default="ppo", choices=["ppo", "sac"],
+                        help="RL algorithm to use: ppo or sac")
     args = parser.parse_args()
 
     # Parse reward kwargs
@@ -139,20 +146,39 @@ def main():
         )
 
     env = make_env(args.env_id, args.reward, **reward_kwargs)
-    policy_kwargs = dict(
-        net_arch=dict(
-            pi=[args.hidden_size, args.hidden_size],
-            vf=[args.hidden_size, args.hidden_size],
+
+    if args.algo == "ppo":
+        policy_kwargs = dict(
+            net_arch=dict(
+                pi=[args.hidden_size, args.hidden_size],
+                vf=[args.hidden_size, args.hidden_size],
+            )
         )
-    )
-    model = PPO(
-        "MlpPolicy",
-        env,
-        policy_kwargs=policy_kwargs,
-        seed=args.seed,
-        device=args.device,
-        verbose=1,
-    )
+        model = PPO(
+            "MlpPolicy",
+            env,
+            policy_kwargs=policy_kwargs,
+            seed=args.seed,
+            device=args.device,
+            verbose=1,
+        )
+    elif args.algo == "sac":
+        policy_kwargs = dict(
+            net_arch=dict(
+                pi=[args.hidden_size, args.hidden_size],
+                qf=[args.hidden_size, args.hidden_size],
+            )
+        )
+        model = SAC(
+            "MlpPolicy",
+            env,
+            policy_kwargs=policy_kwargs,
+            seed=args.seed,
+            device=args.device,
+            verbose=1,
+        )
+    else:
+        raise ValueError(f"Unsupported algorithm: {args.algo}")
 
     callbacks = []
     if use_wandb:

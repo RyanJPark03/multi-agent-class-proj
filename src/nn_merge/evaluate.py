@@ -1,13 +1,15 @@
 import argparse
+from dotenv import load_dotenv
+import os
 from pathlib import Path
 
 import gymnasium as gym
 from gymnasium.wrappers import RecordVideo
-from stable_baselines3 import PPO
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.monitor import Monitor
 
 from nn_merge.envs import make_env
+from nn_merge.utils import load_model
 from nn_merge.eval_cache import (
     DEFAULT_CACHE_PATH,
     get_entry,
@@ -19,6 +21,10 @@ from nn_merge.eval_cache import (
 
 
 def main():
+    load_dotenv()
+    if "MUJOCO_GL" not in os.environ:
+        os.environ["MUJOCO_GL"] = "egl"
+
     parser = argparse.ArgumentParser(description="Evaluate a trained model")
     parser.add_argument("--model", type=str, default="models/fast_and_slow_ants/fast_ant.zip")
     parser.add_argument("--episodes", type=int, default=10)
@@ -50,7 +56,7 @@ def main():
     if args.render:
         env = gym.make(args.env_id, render_mode="human", **env_kwargs)
         env = Monitor(env)
-        model = PPO.load(args.model, device="cpu")
+        model = load_model(args.model, device="cpu")
         mean_reward, std_reward = evaluate_policy(
             model, env, n_eval_episodes=args.episodes, deterministic=True
         )
@@ -61,7 +67,7 @@ def main():
         env = Monitor(env)
         env = RecordVideo(env, video_folder=args.video_dir,
                           episode_trigger=lambda _: True)
-        model = PPO.load(args.model, device="cpu")
+        model = load_model(args.model, device="cpu")
         mean_reward, std_reward = evaluate_policy(
             model, env, n_eval_episodes=args.episodes, deterministic=True
         )
@@ -84,7 +90,7 @@ def main():
             env = make_env(args.env_id, args.reward, **env_kwargs)
             env = Monitor(env)
             env.reset(seed=args.seed)
-            model = PPO.load(args.model, device="cpu")
+            model = load_model(args.model, device="cpu")
             episode_rewards, episode_lengths = evaluate_policy(
                 model, env, n_eval_episodes=args.episodes,
                 deterministic=True, return_episode_rewards=True,

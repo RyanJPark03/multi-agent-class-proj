@@ -1,0 +1,13 @@
+2026-04-14 18:01:42,940 INFO    MainThread:2582885 [wandb_setup.py:_flush():81] Current SDK version is 0.25.1
+2026-04-14 18:01:42,940 INFO    MainThread:2582885 [wandb_setup.py:_flush():81] Configure stats pid to 2582885
+2026-04-14 18:01:42,940 INFO    MainThread:2582885 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2026-04-14 18:01:42,940 INFO    MainThread:2582885 [wandb_init.py:setup_run_log_directory():717] Logging user logs to /home/marfred/codes/multi-agent-class-proj/wandb/run-20260414_180142-lh1m0sl5/logs/debug.log
+2026-04-14 18:01:42,941 INFO    MainThread:2582885 [wandb_init.py:setup_run_log_directory():718] Logging internal logs to /home/marfred/codes/multi-agent-class-proj/wandb/run-20260414_180142-lh1m0sl5/logs/debug-internal.log
+2026-04-14 18:01:42,941 INFO    MainThread:2582885 [wandb_init.py:init():844] calling init triggers
+2026-04-14 18:01:42,941 INFO    MainThread:2582885 [wandb_init.py:init():849] wandb.init called with sweep_config: {}
+config: {'learning_rate': 0.02, 'architecture': 'CNN', 'dataset': 'CIFAR-100', 'epochs': 10, '_wandb': {}}
+2026-04-14 18:01:42,941 INFO    MainThread:2582885 [wandb_init.py:init():892] starting backend
+2026-04-14 18:01:43,154 INFO    MainThread:2582885 [wandb_init.py:init():895] sending inform_init request
+2026-04-14 18:01:43,159 INFO    MainThread:2582885 [wandb_init.py:init():903] backend started and connected
+2026-04-14 18:01:43,178 INFO    MainThread:2582885 [wandb_init.py:init():973] updated telemetry
+2026-04-14 18:01:43,184 INFO    MainThread:2582885 [wandb_init.py:init():997] communicating run to backend with 90.0 second timeout
