@@ -9,3 +9,4 @@ models/
 *_losses.png
 .env
 uv.bin
+wandb/
