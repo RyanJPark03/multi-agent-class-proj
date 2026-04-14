@@ -4,12 +4,28 @@ Experiment codebase for training small RL policies on MuJoCo tasks and merging t
 
 ## Setup
 
-Requires Python 3.10+ and MuJoCo.
+Requires Python 3.10+ and MuJoCo. This project uses [uv](https://docs.astral.sh/uv/) for environment and dependency management.
 
 ```bash
-uv venv && uv pip install -e .
-wandb login  # one-time setup for logging
+uv venv                  # create .venv/ from pyproject.toml
+uv pip install -e .      # install the package in editable mode
+source .venv/bin/activate
+wandb login              # one-time setup for logging (or use --no-wandb)
 ```
+
+You can also run any command without activating the venv by prefixing with `uv run`, e.g. `uv run python -m nn_merge.train ...`.
+
+MuJoCo ships via the `mujoco` pip dependency — no separate system install needed. On headless machines (no display), set `MUJOCO_GL=egl` so rendering/recording works.
+
+## GPU Usage
+
+Training uses PyTorch + Stable-Baselines3 and will run on CUDA if available, CPU otherwise. GPU selection happens automatically:
+
+- [train.py:56](src/nn_merge/train.py#L56) queries `nvidia-smi` and picks the GPU(s) with the most free memory (2 GPUs if >4 are present, else 1), setting `CUDA_VISIBLE_DEVICES` before SB3 imports torch.
+- Override manually with `--gpu 0` or `--gpu 0,1`, or force CPU with `--device cpu`.
+- [run_experiments.py](src/nn_merge/run_experiments.py) assigns GPUs round-robin across concurrent experiments, so parallel runs don't fight over the same device.
+
+Note: PPO on small MLP policies is often CPU-bound (env stepping dominates). A GPU helps most when running several experiments in parallel or using larger networks. The runner also caps total CPU threads to half the machine's cores and divides them evenly across concurrent experiments.
 
 ## Usage
 
@@ -265,22 +281,6 @@ def my_strategy(state_dicts: list[dict[str, torch.Tensor]]) -> dict[str, torch.T
 
 Then use it with `python -m nn_merge.merge --strategy my_strategy`.
 
-## Docker
-
-Build the image:
-
-```bash
-docker compose build
-```
-
-Run with GPU support, mounting `models/` so outputs persist on the host:
-
-```bash
-docker compose run --rm nn-merge
-```
-
-This drops you into a bash shell inside the container with all default flags and mounts applied (`--gpus all`, `--env-file .env`, and volume mounts for `models/`, `experiments/`, and `src/`). MuJoCo is configured for headless EGL rendering automatically. Run `wandb login` inside the container to enable logging.
-
 ## Project Structure
 
 ```
@@ -301,7 +301,6 @@ This drops you into a bash shell inside the container with all default flags and
 ├── experiments/              # YAML experiment configs
 │   └── example.yaml
 ├── scripts/                  # Shell wrappers
-├── Dockerfile
 └── pyproject.toml
 ```
 
