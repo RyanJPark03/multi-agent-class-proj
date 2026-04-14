@@ -1,0 +1,18 @@
+defaults:
+  env_id: Ant-v5
+  timesteps: 10000000
+  hidden_size: 64
+  device: cpu
+
+experiments:
+  - name: fast_ant_1.5
+    reward: forward_target
+    reward_kwargs:
+      speed_target: 1.5
+    seed: 0
+
+  - name: fast_ant_1.0
+    reward: forward_target
+    reward_kwargs:
+      speed_target: 1.0
+    seed: 0
