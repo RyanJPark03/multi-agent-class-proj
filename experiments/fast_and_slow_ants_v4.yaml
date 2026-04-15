@@ -2,17 +2,25 @@ defaults:
   env_id: Ant-v5
   timesteps: 10000000
   hidden_size: 64
-  device: cpu
+  algo: sac
+  device: cuda:0
+  gpu: 2
 
 experiments:
+  - name: fast_ant_1.0
+    reward: healthy_v5_clone
+    reward_kwargs:
+      speed_target: 1.0
+    seed: 0
+
   - name: fast_ant_1.5
     reward: healthy_v5_clone
     reward_kwargs:
       speed_target: 1.5
     seed: 0
 
-  - name: fast_ant_1.0
+  - name: slow_ant_0.5
     reward: healthy_v5_clone
     reward_kwargs:
-      speed_target: 1.0
+      speed_target: 0.5
     seed: 0

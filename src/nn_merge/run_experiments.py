@@ -141,6 +141,7 @@ def main():
     # Collect experiments from all config files
     all_jobs: list[tuple[str, list[str]]] = []  # (label, cmd)
     all_devices_list: list[str] = []
+    all_gpu_pins: list[str | None] = []  # explicit gpu index from yaml, else None
     for config_path in args.config:
         with open(config_path) as f:
             config = yaml.safe_load(f)
@@ -156,7 +157,10 @@ def main():
             label = exp.get("name", f"{config_stem}_{len(all_jobs)}")
             cmd = build_train_command(exp, defaults, output_dir)
             all_jobs.append((label, cmd))
-            all_devices_list.append({**defaults, **exp}.get("device", "cpu"))
+            merged = {**defaults, **exp}
+            all_devices_list.append(merged.get("device", "cpu"))
+            gpu_pin = merged.get("gpu")
+            all_gpu_pins.append(str(gpu_pin) if gpu_pin is not None else None)
 
     max_parallel = args.max_parallel or len(all_jobs)
     semaphore = threading.Semaphore(max_parallel)
@@ -165,8 +169,12 @@ def main():
     total_cpus = os.cpu_count() or 1
     threads_per_exp = max(1, total_cpus // 2 // max_parallel)
 
-    # Assign GPUs round-robin (only if any experiment uses cuda)
-    gpus = get_available_gpus() if any(d != "cpu" for d in all_devices_list) else []
+    # Assign GPUs round-robin (only if any experiment uses cuda without an explicit pin)
+    needs_auto_gpu = any(
+        d != "cpu" and pin is None
+        for d, pin in zip(all_devices_list, all_gpu_pins)
+    )
+    gpus = get_available_gpus() if needs_auto_gpu else []
 
     print(f"Running {len(all_jobs)} experiments from {len(args.config)} config(s) "
           f"(max parallel: {max_parallel}, {threads_per_exp} CPU threads/exp, "
@@ -175,7 +183,14 @@ def main():
     threads = []
     for i, (label, cmd) in enumerate(all_jobs):
         device = all_devices_list[i]
-        gpu = str(gpus[i % len(gpus)]) if gpus and device != "cpu" else None
+        if device == "cpu":
+            gpu = None
+        elif all_gpu_pins[i] is not None:
+            gpu = all_gpu_pins[i]
+        elif gpus:
+            gpu = str(gpus[i % len(gpus)])
+        else:
+            gpu = None
 
         t = threading.Thread(target=run_experiment,
                              args=(cmd, label, gpu, semaphore, threads_per_exp),
