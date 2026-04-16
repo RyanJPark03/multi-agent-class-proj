@@ -304,6 +304,58 @@ Then use it with `python -m nn_merge.merge --strategy my_strategy`.
 └── pyproject.toml
 ```
 
+## Distributed Optimization (DiNNO / CADMM)
+
+Support for distributed consensus training using the DiNNO (Distributed Neural Network Optimization) algorithm. This allows multiple RL agents to train on local data/rewards while being regularized to converge toward a shared global policy.
+
+### Core Components (`src/nn_merge/cadmm/dinno.py`)
+
+- **`DiNNOManager`**: tracks local parameter snapshots ($\theta_k$), dual variables ($p$), and calculates the DiNNO penalty gradients.
+- **`DiNNOCallback`**: Stable Baselines 3 `BaseCallback` that integrates consensus logic into algorithms like PPO/SAC using **PyTorch Gradient Hooks**. By using hooks, we append the consensus term $\nabla \mathcal{L}_{cons} = p + \rho \sum (\theta - \bar{\theta})$ to the RL gradients automatically during the backward pass, requiring no modifications to SB3 library code.
+
+### Detailed Multi-Agent Example
+The following snippet demonstrates how to set up two SAC agents to synchronize their policies through a shared registry:
+
+```python
+import gymnasium as gym
+from stable_baselines3 import SAC
+from nn_merge.cadmm.dinno import DiNNOCallback
+
+# 1. Create a shared registry for parameter exchange
+shared_registry = {}
+
+# 2. Setup agents on their respective environments/devices
+model0 = SAC("MlpPolicy", gym.make("Ant-v5"), device="cuda:0")
+model1 = SAC("MlpPolicy", gym.make("Ant-v5"), device="cuda:1")
+
+# 3. Initialize DiNNOCallbacks for each agent
+callback0 = DiNNOCallback(
+    node_id="agent_0", 
+    rho=5.0,                  # Penalty strength
+    registry=shared_registry, 
+    communication_freq=100    # Sync snapshots every 100 steps
+)
+
+callback1 = DiNNOCallback(
+    node_id="agent_1", 
+    rho=5.0, 
+    registry=shared_registry, 
+    communication_freq=100
+)
+
+# 4. Starting concurrent or sequential training
+# In a real setup, these might run in separate processes
+model0.learn(total_timesteps=50000, callback=callback0)
+model1.learn(total_timesteps=50000, callback=callback1)
+```
+
+### Mathematical Logic
+The DiNNO objective modifies the standard RL loss by adding an augmented Lagrangian penalty:
+$$\mathcal{L}_{total} = \mathcal{L}_{RL} + \theta^T p + \frac{\rho}{2} \sum_{j \in N_i} || \theta - \frac{\theta_i + \theta_j}{2} ||^2$$
+
+The gradient hooks inject the derivative of this penalty directly into the optimizer. Communication happens at the end of every rollout (PPO) or every $N$ steps (SAC), where agents snapshot their current weights to the registry and update their dual variables ($p$) based on the disagreement with their neighbors.
+
+
 ## Notes
 
 - **Ant is hard.** 500K timesteps may not be enough for convergence. Try `HalfCheetah-v5` for faster iteration.
