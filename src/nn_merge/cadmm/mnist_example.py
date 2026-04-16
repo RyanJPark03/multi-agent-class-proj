@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '6'
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = "false"
 import copy
 import ctypes
@@ -16,7 +16,8 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Subset
 import numpy as np
 
-# Use GPU 3 as specified, or fall back to CPU
+from nn_merge.cadmm.dinno import DiNNOManager
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
@@ -49,19 +50,12 @@ class DiNNONode:
         self.dataloader = dataloader
         self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
         
-        # Count total parameters for loss normalization
-        self.num_params = sum(p.numel() for p in self.model.parameters())
-        
-        # Dual variables p_i and stored neighbor weights moved to device
-        self.p = [torch.zeros_like(param).to(device) for param in self.model.parameters()]
-        self.theta_k = [param.clone().detach().to(device) for param in self.model.parameters()]
-        self.neighbors_theta_k = {} # Will store neighboring weights from communication
+        # We now use DiNNOManager for consensus state
+        self.dinno_manager = DiNNOManager(self.model.parameters(), node_id=node_id).to(device)
 
     def update_dual_variables(self, rho):
         # p_i^{k+1} = p_i^k + \rho \sum_{j \in N_i} (\theta_i^k - \theta_j^k)
-        for j, neighbor_theta in self.neighbors_theta_k.items():
-            for p_tensor, my_theta, their_theta in zip(self.p, self.theta_k, neighbor_theta):
-                p_tensor.add_(rho * (my_theta - their_theta))
+        self.dinno_manager.update_dual_variables(rho)
 
     def approximate_primal_update(self, rho, B_steps):
             self.model.train()
@@ -84,21 +78,8 @@ class DiNNONode:
                 # 1. Standard task loss (Negative Log-Likelihood)
                 task_loss = F.nll_loss(output, target)
                 
-                # 2. Add DiNNO Augmented Lagrangian penalties (Normalized by num_params)
-                dual_term = 0.0
-                penalty_term = 0.0
-                
-                for param_idx, (param, p_tensor, my_theta_k) in enumerate(zip(self.model.parameters(), self.p, self.theta_k)):
-                    # \theta^T p_i^{k+1}
-                    dual_term += torch.sum(param * p_tensor)
-                    
-                    # \rho \sum_{j \in N_i} || \theta - (\theta_i^k + \theta_j^k)/2 ||^2_2
-                    for j, neighbor_theta in self.neighbors_theta_k.items():
-                        target_center = (my_theta_k + neighbor_theta[param_idx]) / 2.0
-                        penalty_term += rho * torch.sum((param - target_center) ** 2)
-
-                # Scale the entire augmented Lagrangian component by num_params
-                consensus_loss = (dual_term + penalty_term) / self.num_params
+                # 2. Add DiNNO Augmented Lagrangian penalties
+                consensus_loss = self.dinno_manager.compute_consensus_loss(rho)
                 total_loss = task_loss + consensus_loss
                 
                 total_loss.backward()
@@ -108,7 +89,7 @@ class DiNNONode:
                 total_penalty_loss += consensus_loss.item()
                 
             # Update our stored state for the next communication round
-            self.theta_k = [param.clone().detach() for param in self.model.parameters()]
+            self.dinno_manager.update_snapshot()
             return total_task_loss / B_steps, total_penalty_loss / B_steps
 
 # 3. Main Training Loop
@@ -138,8 +119,8 @@ def train_dinno():
 
     for k in range(COMMUNICATION_ROUNDS):
         # Step 1: Communication (Simulate graph message passing)
-        node0.neighbors_theta_k[1] = [p.clone().detach() for p in node1.theta_k]
-        node1.neighbors_theta_k[0] = [p.clone().detach() for p in node0.theta_k]
+        node0.dinno_manager.receive_neighbor_snapshot(1, node1.dinno_manager.theta_k)
+        node1.dinno_manager.receive_neighbor_snapshot(0, node0.dinno_manager.theta_k)
         
         # Step 2 & 3: DiNNO updates
         stats = []
@@ -156,7 +137,7 @@ def train_dinno():
             avg_task_loss = sum(s[0] for s in stats) / len(stats)
             avg_pen_loss = sum(s[1] for s in stats) / len(stats)
             # Measure weight discrepancy (consensus error)
-            diff = sum(torch.sum((p0 - p1)**2) for p0, p1 in zip(node0.theta_k, node1.theta_k))
+            diff = sum(torch.sum((p0 - p1)**2) for p0, p1 in zip(node0.dinno_manager.theta_k, node1.dinno_manager.theta_k))
             print(f"Round {k:3d} | Task Loss: {avg_task_loss:.4f} | Pen Loss: {avg_pen_loss:.4f} | Consensus Error: {diff.item():.4f}")
 
 if __name__ == "__main__":

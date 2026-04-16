@@ -12,6 +12,7 @@ dependencies = [
     "pyyaml",
     "matplotlib",
     "scipy",
+    "torchvision",
 ]
 
 [project.optional-dependencies]
