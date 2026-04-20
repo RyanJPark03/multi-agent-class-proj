@@ -14,8 +14,11 @@ import argparse
 import re
 from pathlib import Path
 
+import json
+import zipfile
+
 import matplotlib.pyplot as plt
-from stable_baselines3 import PPO
+from stable_baselines3.common.base_class import BaseAlgorithm
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.monitor import Monitor
 
@@ -30,6 +33,30 @@ from nn_merge.eval_cache import (
 )
 from nn_merge.envs import make_env
 from nn_merge.merging.strategies import MERGE_STRATEGIES
+
+
+def _load_model(path: str, device: str = "cpu") -> BaseAlgorithm:
+    """Load an SB3 model, auto-detecting the algorithm from the saved zip."""
+    import stable_baselines3 as sb3
+
+    zip_path = path if path.endswith(".zip") else path + ".zip"
+    with zipfile.ZipFile(zip_path) as zf:
+        data = json.loads(zf.read("data"))
+
+    algo_map = {}
+    for attr in dir(sb3):
+        cls = getattr(sb3, attr)
+        if isinstance(cls, type) and issubclass(cls, BaseAlgorithm) and cls is not BaseAlgorithm:
+            algo_map[attr.upper()] = cls
+
+    policy_class = data.get("policy_class", {})
+    if isinstance(policy_class, dict):
+        policy_class = policy_class.get("__module__", "")
+    for name in algo_map:
+        if name in policy_class.upper():
+            return algo_map[name].load(path, device=device)
+
+    return sb3.PPO.load(path, device=device)
 
 
 def parse_reward_spec(spec: str) -> tuple[str, dict]:
@@ -61,7 +88,7 @@ def parse_model_spec(spec: str) -> tuple[str, str]:
 
 
 def _run_eval(
-    model: PPO,
+    model: BaseAlgorithm,
     env_id: str,
     reward_name: str,
     reward_kwargs: dict,
@@ -110,6 +137,8 @@ def main():
     parser.add_argument("--outlier-sidecar", type=str, default=None,
                         help="Path to outlier sidecar JSON (see nn_merge.outliers). "
                              "Filters episode rewards by per-(group,reward) min/max bounds.")
+    parser.add_argument("--pairwise", action="store_true",
+                        help="Merge every pair of models separately instead of all at once")
     parser.add_argument("--merged-save-dir", type=str, default=None,
                         help="Directory to save merged models (e.g. models/my_exp). "
                              "Each strategy saved as <dir>/merged_<strategy>.zip")
@@ -129,12 +158,12 @@ def main():
 
     # --- Evaluate individual models ---
     model_specs = [parse_model_spec(s.strip()) for s in args.models if s.strip()]
-    loaded_models: dict[str, PPO] = {}
+    loaded_models: dict[str, BaseAlgorithm] = {}
     for label, model_path in model_specs:
         if not Path(model_path).exists() and not Path(model_path + ".zip").exists():
             raise FileNotFoundError(f"Model not found: {model_path!r}")
         print(f"Evaluating {label} ({model_path})...")
-        model = PPO.load(model_path, device="cpu")
+        model = _load_model(model_path, device="cpu")
         loaded_models[label] = model
 
         for reward_name, reward_kwargs, reward_label in reward_specs:
@@ -147,34 +176,46 @@ def main():
                 results[reward_label].setdefault(label, []).extend(rewards)
 
     # --- Merge and evaluate ---
-    state_dicts = [m.policy.state_dict() for m in loaded_models.values()]
+    import copy
+    from itertools import combinations
+
+    labels = list(loaded_models.keys())
+    if args.pairwise:
+        merge_groups = list(combinations(range(len(labels)), 2))
+    else:
+        merge_groups = [tuple(range(len(labels)))]
+
     for strategy_name in args.strategies:
         if strategy_name not in MERGE_STRATEGIES:
             print(f"Unknown strategy {strategy_name!r}, skipping.")
             continue
-        print(f"Merging with {strategy_name}...")
-        merged_sd = MERGE_STRATEGIES[strategy_name](state_dicts)
-        # Use first model as shell (copy so later strategies aren't contaminated)
-        import copy
-        shell = copy.deepcopy(list(loaded_models.values())[0])
-        shell.policy.load_state_dict(merged_sd)
-        group_label = f"merged_{strategy_name}"
 
-        if args.merged_save_dir:
-            save_dir = Path(args.merged_save_dir)
-            save_dir.mkdir(parents=True, exist_ok=True)
-            save_path = save_dir / f"merged_{strategy_name}"
-            shell.save(str(save_path))
-            print(f"  Merged model saved to {save_path}.zip")
+        for idx_group in merge_groups:
+            group_labels = [labels[i] for i in idx_group]
+            group_paths = [model_specs[i][1] for i in idx_group]
+            state_dicts = [loaded_models[l].policy.state_dict() for l in group_labels]
 
-        for reward_name, reward_kwargs, reward_label in reward_specs:
-            for seed in args.eval_seeds:
-                key = make_merged_key([p for _, p in model_specs], strategy_name, reward_name, seed, reward_kwargs)
-                rewards = _run_eval(
-                    shell, args.env_id, reward_name, reward_kwargs, seed,
-                    args.episodes, cache, key, args.no_cache,
-                )
-                results[reward_label].setdefault(group_label, []).extend(rewards)
+            group_label = f"merged({'+'.join(group_labels)})"
+            print(f"Merging {group_label} with {strategy_name}...")
+            merged_sd = MERGE_STRATEGIES[strategy_name](state_dicts)
+            shell = copy.deepcopy(loaded_models[group_labels[0]])
+            shell.policy.load_state_dict(merged_sd)
+
+            if args.merged_save_dir:
+                save_dir = Path(args.merged_save_dir)
+                save_dir.mkdir(parents=True, exist_ok=True)
+                save_path = save_dir / f"merged_{'_'.join(group_labels)}_{strategy_name}"
+                shell.save(str(save_path))
+                print(f"  Merged model saved to {save_path}.zip")
+
+            for reward_name, reward_kwargs, reward_label in reward_specs:
+                for seed in args.eval_seeds:
+                    key = make_merged_key(group_paths, strategy_name, reward_name, seed, reward_kwargs)
+                    rewards = _run_eval(
+                        shell, args.env_id, reward_name, reward_kwargs, seed,
+                        args.episodes, cache, key, args.no_cache,
+                    )
+                    results[reward_label].setdefault(group_label, []).extend(rewards)
 
     if not args.no_cache:
         save_cache(cache, args.cache)
