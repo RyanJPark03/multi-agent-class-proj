@@ -14,7 +14,7 @@ import numpy as np
 
 
 class ForwardTarget(gym.RewardWrapper):
-    def __init__(self, env, speed_target: float = 1.0, torque_penalty: float = 0.1):
+    def __init__(self, env, speed_target: float = 2.5, torque_penalty: float = 0.1):
         super().__init__(env)
         self.speed_target = speed_target
         self.torque_penalty = torque_penalty

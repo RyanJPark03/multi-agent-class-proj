@@ -313,7 +313,7 @@ Support for distributed consensus training using the DiNNO (Distributed Neural N
 - **`DiNNOManager`**: tracks local parameter snapshots ($\theta_k$), dual variables ($p$), and calculates the DiNNO penalty gradients.
 - **`DiNNOCallback`**: Stable Baselines 3 `BaseCallback` that integrates consensus logic into algorithms like PPO/SAC using **PyTorch Gradient Hooks**. By using hooks, we append the consensus term $\nabla \mathcal{L}_{cons} = p + \rho \sum (\theta - \bar{\theta})$ to the RL gradients automatically during the backward pass, requiring no modifications to SB3 library code.
 
-### Detailed Multi-Agent Example
+### Example
 The following snippet demonstrates how to set up two SAC agents to synchronize their policies through a shared registry:
 
 ```python
@@ -355,6 +355,11 @@ $$\mathcal{L}_{total} = \mathcal{L}_{RL} + \theta^T p + \frac{\rho}{2} \sum_{j \
 
 The gradient hooks inject the derivative of this penalty directly into the optimizer. Communication happens at the end of every rollout (PPO) or every $N$ steps (SAC), where agents snapshot their current weights to the registry and update their dual variables ($p$) based on the disagreement with their neighbors.
 
+## CLI Example
+
+```bash
+python src/nn_merge/train.py --dinno --load-base-model models/fast_and_slow_ants_v4/slow_ant_0.5  --algo sac   --timesteps 1000000 --gpu 3
+```
 
 ## Notes
 

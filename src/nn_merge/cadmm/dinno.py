@@ -1,4 +1,6 @@
 import torch
+from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import BaseCallback
 
 class DiNNOManager:
     """
@@ -7,27 +9,17 @@ class DiNNOManager:
     augmented Lagrangian penalty to add to the local task loss.
     """
     def __init__(self, parameters, node_id=None):
-        """
-        Args:
-            parameters: Iterable of torch.Tensor (e.g., from model.parameters())
-            node_id: Optional identifier for this node
-        """
         self.node_id = node_id
         self.parameters = list(parameters)
         
-        # Calculate total parameters for loss normalization
         self.num_params = sum(p.numel() for p in self.parameters)
-        
-        # Determine device from the first parameter (default to CPU if empty)
         self.device = self.parameters[0].device if self.parameters else torch.device("cpu")
         
-        # Initialize dual variables and local snapshot on the same device
         self.p = [torch.zeros_like(param).to(self.device) for param in self.parameters]
         self.theta_k = [param.clone().detach().to(self.device) for param in self.parameters]
         
-        # Dictionary mapping neighbor_id -> list of tensor snapshots
         self.neighbors_theta_k = {}
-        self.rho = 1.0 # Default rho
+        self.rho = 1.0 
 
     def set_rho(self, rho):
         self.rho = rho
@@ -42,19 +34,15 @@ class DiNNOManager:
         param = self.parameters[param_idx]
         
         grad_term = torch.zeros_like(param)
-        # \theta^T p_i part gradient is just p_i
         grad_term.add_(p_tensor)
         
-        # \rho \sum_{j \in N_i} || \theta - (\theta_i^k + \theta_j^k)/2 ||^2_2 part gradient
         for neighbor_theta in self.neighbors_theta_k.values():
             target_center = (my_theta_k + neighbor_theta[param_idx]) / 2.0
-            # Derivative of rho * (x - c)^2 is 2 * rho * (x - c)
             grad_term.add_(2.0 * self.rho * (param - target_center))
             
-        return grad_term / self.num_params
+        return grad_term
 
     def to(self, device):
-        """Moves internal state to the specified device."""
         self.device = device
         self.p = [p.to(device) for p in self.p]
         self.theta_k = [t.to(device) for t in self.theta_k]
@@ -64,77 +52,50 @@ class DiNNOManager:
         return self
 
     def update_snapshot(self):
-        """Snapshots the current model parameters into theta_k to be shared with neighbors."""
         self.theta_k = [param.clone().detach().to(self.device) for param in self.parameters]
 
     def receive_neighbor_snapshot(self, neighbor_id, neighbor_theta_k):
-        """
-        Stores a snapshot of a neighbor's parameters.
-        Args:
-            neighbor_id: Identifier for the neighbor.
-            neighbor_theta_k: List of parameter tensors from the neighbor.
-        """
         self.neighbors_theta_k[neighbor_id] = [t.clone().detach().to(self.device) for t in neighbor_theta_k]
 
     def update_dual_variables(self, rho):
-        """
-        Updates the dual variables for this node based on the consensus difference.
-        p_i^{k+1} = p_i^k + \rho \sum_{j \in N_i} (\theta_i^k - \theta_j^k)
-        """
         for neighbor_theta in self.neighbors_theta_k.values():
             for p_tensor, my_theta, their_theta in zip(self.p, self.theta_k, neighbor_theta):
                 p_tensor.add_(rho * (my_theta - their_theta))
 
-    def compute_consensus_loss(self, rho):
-        r"""
-        Computes the DiNNO Augmented Lagrangian consensus term.
-        This scalar loss should be added to the standard task loss before calling .backward().
-        
-        Returns:
-            torch.Tensor: The computed consensus penalty loss term scalar (differentiable w.r.t parameters).
-        """
-        dual_term = 0.0
-        penalty_term = 0.0
-        
-        # We process parameter updates keeping gradients flowing through self.parameters only
-        for param_idx, (param, p_tensor, my_theta_k) in enumerate(zip(self.parameters, self.p, self.theta_k)):
-            # \theta^T p_i^{k+1}
-            dual_term += torch.sum(param * p_tensor)
-            
-            # \rho \sum_{j \in N_i} || \theta - (\theta_i^k + \theta_j^k)/2 ||^2_2
-            for neighbor_theta in self.neighbors_theta_k.values():
-                target_center = (my_theta_k + neighbor_theta[param_idx]) / 2.0
-                penalty_term += rho * torch.sum((param - target_center) ** 2)
-
-        # Scale the entire augmented Lagrangian component by num_params for stability
-        consensus_loss = (dual_term + penalty_term) / self.num_params
-        return consensus_loss
-
-from stable_baselines3.common.callbacks import BaseCallback
-
 class DiNNOCallback(BaseCallback):
     """
     Stable Baselines 3 Callback to integrate DiNNO/CADMM consensus.
-    Registers backward hooks on policy parameters to inject consensus gradients.
     """
-    def __init__(self, node_id, rho=1.0, registry=None, communication_freq=1000, verbose=0):
+    def __init__(self, node_id, rho_init=0.0001, rho_final=0.01, rho_schedule_steps=1000000, registry=None, communication_freq=1000, target_params="actor", verbose=0):
         super().__init__(verbose)
         self.node_id = node_id
-        self.rho = rho
-        self.registry = registry # Shared dictionary for snapshots
+        # Start rho very small to prevent overpowering the initial RL gradients
+        self.rho_init = rho_init
+        self.rho_final = rho_final
+        self.rho_schedule_steps = rho_schedule_steps
+        self.rho = rho_init
+        self.registry = registry 
         self.communication_freq = communication_freq
+        self.target_params = target_params
         self.dinno_manager = None
         self.hooks = []
 
     def _init_callback(self):
-        # In BaseCallback, self.model is already assigned before this call
-        # Initialize manager with policy parameters
-        params = list(self.model.policy.parameters())
+        if self.target_params == "actor":
+            if hasattr(self.model.policy, "actor"): # SAC
+                params = list(self.model.policy.actor.parameters())
+            elif hasattr(self.model.policy, "mlp_extractor") and hasattr(self.model.policy, "action_net"): # PPO
+                # Crucial: Only sync the pi features, not the vf (critic) features!
+                params = list(self.model.policy.mlp_extractor.policy_net.parameters()) + list(self.model.policy.action_net.parameters())
+            else:
+                raise ValueError("Could not find actor parameters.")
+        else:
+            params = list(self.model.policy.parameters())
+
         self.dinno_manager = DiNNOManager(params, node_id=self.node_id)
         self.dinno_manager.set_rho(self.rho)
         self.dinno_manager.to(self.model.device)
 
-        # Register backward hooks
         for i, param in enumerate(params):
             if param.requires_grad:
                 hook = self._make_hook(i)
@@ -142,37 +103,47 @@ class DiNNOCallback(BaseCallback):
 
     def _make_hook(self, idx):
         def hook(grad):
-            return grad + self.dinno_manager.get_consensus_grad(idx)
+            c_grad = self.dinno_manager.get_consensus_grad(idx)
+            
+            # PROTECT ADAM: Clip the consensus gradient so it doesn't wipe out the RL task gradient.
+            # We constrain the CADMM gradient norm to be at most 0.5 (SB3's default max_grad_norm)
+            max_norm = 0.5
+            c_norm = torch.norm(c_grad)
+            if c_norm > max_norm:
+                c_grad = c_grad * (max_norm / (c_norm + 1e-8))
+                
+            return grad + c_grad
         return hook
 
     def _on_rollout_end(self) -> bool:
-        """Triggered at the end of every rollout (PPO)."""
-        self._sync()
+        # PPO exchanges weights at the end of the rollout (before the optimization epochs begin)
+        if isinstance(self.model, PPO):
+            self._sync()
         return True
 
     def _on_step(self) -> bool:
-        """Triggered every step (SAC)."""
-        if self.model.num_timesteps % self.communication_freq == 0:
+        if self.rho_schedule_steps > 0:
+            alpha = min(1.0, self.model.num_timesteps / self.rho_schedule_steps)
+            self.rho = self.rho_init + alpha * (self.rho_final - self.rho_init)
+            if self.dinno_manager:
+                self.dinno_manager.set_rho(self.rho)
+
+        # SAC updates every step, so we sync based on communication freq
+        if not isinstance(self.model, PPO) and self.model.num_timesteps % self.communication_freq == 0:
             self._sync()
         return True
 
     def _sync(self):
-        """Update snapshot, exchange with neighbors, and update dual variables."""
         if self.dinno_manager is None:
             return
             
-        # 1. Update own snapshot
         self.dinno_manager.update_snapshot()
         
-        # 2. Post to registry
         if self.registry is not None:
-            self.registry[self.node_id] = self.dinno_manager.theta_k
+            self.registry[self.node_id] = [t.cpu() for t in self.dinno_manager.theta_k]
             
-            # 3. Read neighbors from registry (Assume all other entries are neighbors)
             for other_id, snapshot in self.registry.items():
                 if other_id != self.node_id:
                     self.dinno_manager.receive_neighbor_snapshot(other_id, snapshot)
         
-        # 4. Update dual variables
         self.dinno_manager.update_dual_variables(self.rho)
-
