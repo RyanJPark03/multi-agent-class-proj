@@ -34,12 +34,22 @@ from nn_merge.eval_cache import (
 from nn_merge.envs import make_env
 from nn_merge.merging.strategies import MERGE_STRATEGIES
 
+plt.rcParams.update({
+    "font.family": "serif",
+    "font.serif": ["Palatino", "P052", "URW Palladio L", "TeX Gyre Pagella",
+                   "Book Antiqua", "DejaVu Serif"],
+    "mathtext.fontset": "stix",
+})
+
 
 def _load_model(path: str, device: str = "cpu") -> BaseAlgorithm:
     """Load an SB3 model, auto-detecting the algorithm from the saved zip."""
     import stable_baselines3 as sb3
 
-    zip_path = path if path.endswith(".zip") else path + ".zip"
+    if path.endswith(".zip") or Path(path).is_file():
+        zip_path = path
+    else:
+        zip_path = path + ".zip"
     with zipfile.ZipFile(zip_path) as zf:
         data = json.loads(zf.read("data"))
 
@@ -120,6 +130,76 @@ def _run_eval(
     return rewards
 
 
+def save_split_line_plot(
+    results: dict[str, dict[str, list[float]]],
+    xs: list[float],
+    reward_labels: list[str],
+    x_kwarg: str,
+    env_id: str,
+    output_path: str,
+) -> None:
+    """Presentation-specific line plot split into two figures.
+
+    Fig 1: groups containing 'slow' + merged groups containing 'agent0'/'_0'.
+    Fig 2: groups containing 'fast' + merged groups containing 'agent1'/'_1'.
+    Saves to `<stem>_slow.<ext>` and `<stem>_fast.<ext>` next to `output_path`.
+    """
+    import numpy as np
+
+    all_groups = sorted({g for lbl in reward_labels for g in results[lbl]})
+    slow = [g for g in all_groups if "slow" in g.lower()]
+    fast = [g for g in all_groups if "fast" in g.lower()]
+    merged = [g for g in all_groups if "merged" in g.lower()]
+    merged_0 = [g for g in merged if "agent0" in g.lower() or g.lower().endswith("_0")]
+    merged_1 = [g for g in merged if "agent1" in g.lower() or g.lower().endswith("_1")]
+
+    base = Path(output_path)
+    figures = [
+        (slow + merged_0, f"Slow ant vs merged ({env_id})",
+         base.with_name(f"{base.stem}_slow{base.suffix}"),
+         ["#1f77b4", "#ff7f0e"]),  # blue + orange
+        (fast + merged_1, f"Fast ant vs merged ({env_id})",
+         base.with_name(f"{base.stem}_fast{base.suffix}"),
+         ["#2ca02c", "#d62728"]),  # green + red
+    ]
+
+    for groups, title, out_path, palette in figures:
+        if not groups:
+            print(f"  Skipping split plot {out_path.name}: no matching groups.")
+            continue
+        fig, ax = plt.subplots(figsize=(8, 5))
+        for i, group in enumerate(groups):
+            means, stds = [], []
+            for lbl in reward_labels:
+                rs = results[lbl].get(group, [])
+                if rs:
+                    means.append(float(np.mean(rs)))
+                    stds.append(float(np.std(rs)))
+                else:
+                    means.append(np.nan)
+                    stds.append(0.0)
+            means = np.array(means)
+            stds = np.array(stds)
+            color = palette[i % len(palette)]
+            ax.plot(xs, means, marker="o", color=color, label=group, linewidth=2)
+            ax.fill_between(xs, means - stds, means + stds, color=color, alpha=0.15)
+
+        ax.set_xlabel(x_kwarg)
+        ax.set_ylabel("Mean episode reward")
+        ax.set_title(title)
+        ax.set_xticks(xs)
+        ax.grid(False)
+        ax.legend(loc="best", frameon=False)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        fig.tight_layout()
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Split line plot saved to {out_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Evaluate models and plot violin comparisons")
     parser.add_argument("--models", nargs="+", required=True,
@@ -134,6 +214,14 @@ def main():
     parser.add_argument("--cache", type=str, default=DEFAULT_CACHE_PATH)
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--output", type=str, default="models/eval_plot.png")
+    parser.add_argument("--line-output", type=str, default=None,
+                        help="If set, also save a line plot (mean ± std) with the "
+                             "value of --x-kwarg on the x-axis.")
+    parser.add_argument("--split-line-output", type=str, default=None,
+                        help="Presentation-specific: save two line-plot figures "
+                             "(slow+merged_0, fast+merged_1) using the given base path.")
+    parser.add_argument("--x-kwarg", type=str, default="speed_target",
+                        help="Reward kwarg to use as the x-axis in the line plot.")
     parser.add_argument("--outlier-sidecar", type=str, default=None,
                         help="Path to outlier sidecar JSON (see nn_merge.outliers). "
                              "Filters episode rewards by per-(group,reward) min/max bounds.")
@@ -266,6 +354,70 @@ def main():
     fig.savefig(args.output, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Figure saved to {args.output}")
+
+    # --- Optional line plot: x = reward kwarg value, y = mean reward ± std ---
+    if args.line_output:
+        import numpy as np
+
+        xy_specs = [(kw, lbl) for _, kw, lbl in reward_specs if args.x_kwarg in kw]
+        if not xy_specs:
+            print(f"Skipping line plot: no rewards expose kwarg {args.x_kwarg!r}.")
+        else:
+            xy_specs.sort(key=lambda t: float(t[0][args.x_kwarg]))
+            xs = [float(kw[args.x_kwarg]) for kw, _ in xy_specs]
+            reward_labels = [lbl for _, lbl in xy_specs]
+
+            all_groups = sorted(
+                {g for lbl in reward_labels for g in results[lbl]},
+                key=lambda k: (k.startswith("merged"), k),
+            )
+
+            fig, ax = plt.subplots(figsize=(8, 5))
+            cmap = plt.get_cmap("tab10")
+            for i, group in enumerate(all_groups):
+                means, stds = [], []
+                for lbl in reward_labels:
+                    rs = results[lbl].get(group, [])
+                    if rs:
+                        means.append(float(np.mean(rs)))
+                        stds.append(float(np.std(rs)))
+                    else:
+                        means.append(np.nan)
+                        stds.append(0.0)
+                means = np.array(means)
+                stds = np.array(stds)
+                color = cmap(i % 10)
+                ax.plot(xs, means, marker="o", color=color, label=group, linewidth=2)
+                ax.fill_between(xs, means - stds, means + stds, color=color, alpha=0.15)
+
+            ax.set_xlabel(args.x_kwarg)
+            ax.set_ylabel("Mean episode reward")
+            ax.set_title(f"Performance vs {args.x_kwarg} ({args.env_id})")
+            ax.grid(False)
+            ax.legend(loc="best", frameon=False)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)       
+            fig.tight_layout()
+
+            
+
+            Path(args.line_output).parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(args.line_output, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            print(f"Line plot saved to {args.line_output}")
+
+    if args.split_line_output:
+        xy_specs = [(kw, lbl) for _, kw, lbl in reward_specs if args.x_kwarg in kw]
+        if not xy_specs:
+            print(f"Skipping split line plot: no rewards expose kwarg {args.x_kwarg!r}.")
+        else:
+            xy_specs.sort(key=lambda t: float(t[0][args.x_kwarg]))
+            xs = [float(kw[args.x_kwarg]) for kw, _ in xy_specs]
+            reward_labels = [lbl for _, lbl in xy_specs]
+            save_split_line_plot(
+                results, xs, reward_labels, args.x_kwarg, args.env_id,
+                args.split_line_output,
+            )
 
 
 if __name__ == "__main__":
