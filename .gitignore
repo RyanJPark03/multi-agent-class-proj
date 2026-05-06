@@ -10,3 +10,4 @@ models/
 .env
 uv.bin
 wandb/
+**claude/
