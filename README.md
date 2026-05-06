@@ -21,9 +21,9 @@ MuJoCo ships via the `mujoco` pip dependency — no separate system install need
 
 Training uses PyTorch + Stable-Baselines3 and will run on CUDA if available, CPU otherwise. GPU selection happens automatically:
 
-- [train.py:56](src/nn_merge/train.py#L56) queries `nvidia-smi` and picks the GPU(s) with the most free memory (2 GPUs if >4 are present, else 1), setting `CUDA_VISIBLE_DEVICES` before SB3 imports torch.
-- Override manually with `--gpu 0` or `--gpu 0,1`, or force CPU with `--device cpu`.
-- [run_experiments.py](src/nn_merge/run_experiments.py) assigns GPUs round-robin across concurrent experiments, so parallel runs don't fight over the same device.
+- Explicitly specify with `--gpu 0` or `--gpu 3`. In DiNNO training, if multiple GPUs are visible (e.g., `--gpu 0,1`), the script will automatically assign each agent to its own device.
+- Force CPU with `--device cpu`.
+- [run_experiments.py](src/nn_merge/run_experiments.py) assigns GPUs round-robin across concurrent experiments.
 
 Note: PPO on small MLP policies is often CPU-bound (env stepping dominates). A GPU helps most when running several experiments in parallel or using larger networks. The runner also caps total CPU threads to half the machine's cores and divides them evenly across concurrent experiments.
 
@@ -56,13 +56,16 @@ Training metrics are logged to Weights & Biases. Use `--no-wandb` to disable.
 | `--env-id` | `Ant-v5` | Gymnasium environment |
 | `--hidden-size` | `64` | Hidden layer size (2 layers) |
 | `--reward` | `default` | Reward wrapper name (see below) |
-| `--gpu` | auto | Comma-separated CUDA GPUs (e.g. `0` or `0,1`) |
+| `--gpu` | auto | Comma-separated CUDA GPUs (e.g. `0` or `3`) |
 | `--wandb-project` | `nn-merge` | W&B project name |
 | `--run-name` | auto | W&B run name |
 | `--no-wandb` | off | Disable W&B logging |
-| `--reward-kwargs` | none | Reward wrapper params (e.g. `speed_target=3.0`) |
+| `--reward-kwargs` | none | Reward wrapper params (e.g. `speed_target=3.0 torque_penalty=0.05`) |
 | `--checkpoint-freq` | `timesteps/10` | Save a checkpoint every N timesteps (0 to disable) |
 | `--save-wandb-checkpoints` | off | Upload checkpoints as W&B artifacts |
+| `--algo` | `ppo` | RL algorithm (`ppo` or `sac`) |
+| `--dinno` | off | Enable parallel DiNNO consensus training |
+| `--load-base-model` | none | Path to a single base model to initialize both DiNNO agents |
 
 A `_params.txt` file with model parameter summary is saved alongside each model after training.
 
@@ -147,12 +150,26 @@ python -m nn_merge.evaluate --model models/ant-v5_seed0 --record
 | `--reward` | `default` | Reward wrapper (must match training) |
 | `--render` | off | Live GUI rendering (requires display) |
 | `--record` | off | Save MP4 videos to `--video-dir` |
-| `--video-dir` | `models/videos` | Directory for recorded videos |
+| `--video-dir` | auto | Directory for videos (defaults to `<model>_eval_videos/`) |
+| `--no-early-termination` | off | Disable healthy checks (let agent run to time limit) |
+| `--reward-kwargs` | none | Override reward params (e.g. `speed_target=1.5`) |
+| `--gpu` | none | Explicitly set GPU for evaluation |
 | `--seed` | `0` | Eval environment seed (observation noise) |
 | `--cache` | `models/eval_cache.json` | Path to evaluation cache |
 | `--no-cache` | off | Skip cache read/write |
 
 Results are cached by `(model, reward, seed)` — re-running the same combination skips evaluation.
+
+Example for running model with dynamic speed target:
+
+```bash
+python src/nn_merge/evaluate.py \
+    --model path/to/merged_model.zip \
+    --reward dynamic_target \
+    --reward-kwargs target1=0.5 target2=1.5 switch_step=500 \
+    --record
+
+```
 
 ### Plot
 
@@ -246,9 +263,11 @@ Reward wrappers live in `src/nn_merge/envs/rewards.py`. Built-in options:
 |---|---|
 | `default` | Ant-v5's built-in reward (forward velocity + survival - control cost) |
 | `forward` | Pure forward velocity, no penalties |
-| `forward_target` | Reward proximity to target speed, penalize torque. kwargs: `speed_target`, `torque_penalty` |
+| `forward_target` | Multi-task reward. Appends `speed_target` to the observation. Penalty is calculated as relative error squared. kwargs: `speed_target`, `torque_penalty`, `healthy_reward` |
+| `dynamic_target` | Mid-episode goal switching. Switches from `target1` to `target2` at `switch_step`. |
 | `spin` | Angular velocity around z-axis |
 | `energy_efficient` | Target moderate speed, penalize large torques. kwargs: `speed_target`, `torque_penalty` |
+| `healthy_v5_clone` | Configurable speed target with standard Healthy check |
 
 Reward wrappers that accept kwargs can be configured from the CLI:
 
@@ -311,7 +330,9 @@ Support for distributed consensus training using the DiNNO (Distributed Neural N
 ### Core Components (`src/nn_merge/cadmm/dinno.py`)
 
 - **`DiNNOManager`**: tracks local parameter snapshots ($\theta_k$), dual variables ($p$), and calculates the DiNNO penalty gradients.
-- **`DiNNOCallback`**: Stable Baselines 3 `BaseCallback` that integrates consensus logic into algorithms like PPO/SAC using **PyTorch Gradient Hooks**. By using hooks, we append the consensus term $\nabla \mathcal{L}_{cons} = p + \rho \sum (\theta - \bar{\theta})$ to the RL gradients automatically during the backward pass, requiring no modifications to SB3 library code.
+- **`DiNNOCallback`**: Stable Baselines 3 `BaseCallback` that integrates consensus logic into algorithms like PPO/SAC using **PyTorch Gradient Hooks**. By using hooks, we append the consensus term $\nabla \mathcal{L}_{cons} = p + \rho \sum (\theta - \bar{\theta})$ to the RL gradients automatically during the backward pass.
+- **Target Parameters**: In multi-task DiNNO (where agents have different speed targets), it is critical to set `target_params="actor"` so consensus is only enforced on the policy/action network and not the value function/critic, which must diverge to capture different reward scales.
+- **Observation Space**: The `forward_target` reward wrapper automatically appends the `speed_target` to the observation space. This allows a single merged policy to behave differently based on the input goal.
 
 ### Example
 The following snippet demonstrates how to set up two SAC agents to synchronize their policies through a shared registry:

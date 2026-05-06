@@ -41,20 +41,36 @@ def main():
                         help="Disable terminate_when_unhealthy so episodes run "
                              "to the time limit (useful for fast/unstable policies)")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--reward-kwargs", nargs="*", default=[],
+                        help="Reward kwargs (e.g., speed_target=1.5)")
     parser.add_argument("--cache", type=str, default=DEFAULT_CACHE_PATH)
     parser.add_argument("--no-cache", action="store_true")
+    parser.add_argument("--gpu", type=str, default=None)
     args = parser.parse_args()
 
+    if args.gpu is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+        print(f"Setting CUDA_VISIBLE_DEVICES to: {args.gpu}")
+        
     if args.record and args.video_dir is None:
         model_path = Path(args.model)
         args.video_dir = str(model_path.parent / (model_path.stem + "_eval_videos"))
+
+    def _parse_val(v):
+        try:
+            if "." in v: return float(v)
+            return int(v)
+        except ValueError: return v
+
+    reward_kwargs = {kv.split("=", 1)[0]: _parse_val(kv.split("=", 1)[1]) for kv in args.reward_kwargs}
 
     env_kwargs = {}
     if args.no_early_termination:
         env_kwargs["terminate_when_unhealthy"] = False
 
     if args.render:
-        env = gym.make(args.env_id, render_mode="human", **env_kwargs)
+        env_kwargs["render_mode"] = "human"
+        env = make_env(args.env_id, args.reward, env_kwargs=env_kwargs, **reward_kwargs)
         env = Monitor(env)
         model = load_model(args.model, device="cpu")
         mean_reward, std_reward = evaluate_policy(
@@ -63,7 +79,8 @@ def main():
         print(f"Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
 
     elif args.record:
-        env = gym.make(args.env_id, render_mode="rgb_array", **env_kwargs)
+        env_kwargs["render_mode"] = "rgb_array"
+        env = make_env(args.env_id, args.reward, env_kwargs=env_kwargs, **reward_kwargs)
         env = Monitor(env)
         env = RecordVideo(env, video_folder=args.video_dir,
                           episode_trigger=lambda _: True)
@@ -87,7 +104,7 @@ def main():
                 print(f"Cache hit (seed={args.seed}, {len(episode_rewards)} episodes)")
 
         if episode_rewards is None:
-            env = make_env(args.env_id, args.reward, **env_kwargs)
+            env = make_env(args.env_id, args.reward, env_kwargs=env_kwargs, **reward_kwargs)
             env = Monitor(env)
             env.reset(seed=args.seed)
             model = load_model(args.model, device="cpu")

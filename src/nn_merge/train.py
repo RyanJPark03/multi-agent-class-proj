@@ -66,7 +66,7 @@ def main():
     parser.add_argument("--save-path", type=str, default=None)
     parser.add_argument("--env-id", type=str, default="Ant-v5")
     parser.add_argument("--hidden-size", type=int, default=64)
-    parser.add_argument("--reward", type=str, default="default")
+    parser.add_argument("--reward", type=str, default="forward_target")
     parser.add_argument("--gpu", type=str, default=None)
     parser.add_argument("--wandb-project", type=str, default="nn-merge")
     parser.add_argument("--run-name", type=str, default=None)
@@ -93,8 +93,34 @@ def main():
     use_wandb = not args.no_wandb
 
     if not args.dinno:
-        # Standard Single Agent Training logic remains same...
-        pass 
+        # Standard Single Agent Training
+        # Ensure a speed target is set (defaulting to 0.5 for the slow agent baseline)
+        if "speed_target" not in reward_kwargs:
+            reward_kwargs["speed_target"] = 0.5
+        
+        env_kwargs = {"terminate_when_unhealthy": False}
+        env = make_env(args.env_id, args.reward, env_kwargs=env_kwargs, **reward_kwargs)
+        
+        if use_wandb:
+            import wandb
+            wandb.init(
+                project=args.wandb_project,
+                name=args.run_name or f"{args.env_id}_{args.reward}_single_seed{args.seed}",
+                config=vars(args)
+            )
+
+        callbacks = _get_callbacks(args, use_wandb, save_path)
+        
+        if args.load_base_model:
+            model = _load_model(args, args.load_base_model, env, args.device)
+        else:
+            model = _create_model(args, env, device=args.device)
+            
+        model.learn(total_timesteps=args.timesteps, callback=callbacks)
+        model.save(save_path)
+        
+        if use_wandb:
+            wandb.finish()
     else:
         config = DiNNOConfig()
         manager = mp.Manager()
@@ -142,7 +168,8 @@ def train_worker(agent_idx, args, device, target_speed, shared_registry, save_pa
     reward_kwargs = {kv.split("=", 1)[0]: _parse_val(kv.split("=", 1)[1]) for kv in args.reward_kwargs}
     reward_kwargs["speed_target"] = target_speed
 
-    env = make_env(args.env_id, args.reward, **reward_kwargs)
+    env_kwargs = {"terminate_when_unhealthy": False}
+    env = make_env(args.env_id, args.reward, env_kwargs=env_kwargs, **reward_kwargs)
     config = DiNNOConfig()
     
     # CRITICAL FIX: target_params MUST be "actor". Never apply consensus to the Critic
