@@ -1,0 +1,25 @@
+defaults:
+  env_id: HalfCheetah-v5
+  timesteps: 3000000
+  hidden_size: 64
+  device: cpu
+  max_threads: 2
+
+experiments:
+  - name: slow_cheetah
+    reward: half_cheetah_fwd_tgt
+    reward_kwargs:
+      speed_target: 0.5
+    seed: 0
+
+  - name: medium_cheetah
+    reward: half_cheetah_fwd_tgt
+    reward_kwargs:
+      speed_target: 1.5
+    seed: 0
+
+  - name: fast_cheetah
+    reward: half_cheetah_fwd_tgt
+    reward_kwargs:
+      speed_target: 3.0
+    seed: 0
