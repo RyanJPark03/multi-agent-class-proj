@@ -61,6 +61,7 @@ Training metrics are logged to Weights & Biases. Use `--no-wandb` to disable.
 | `--run-name` | auto | W&B run name |
 | `--no-wandb` | off | Disable W&B logging |
 | `--reward-kwargs` | none | Reward wrapper params (e.g. `speed_target=3.0 torque_penalty=0.05`) |
+| `--env-kwargs` | none | Kwargs passed to `gym.make` (e.g. `terminate_when_unhealthy=False`) |
 | `--checkpoint-freq` | `timesteps/10` | Save a checkpoint every N timesteps (0 to disable) |
 | `--save-wandb-checkpoints` | off | Upload checkpoints as W&B artifacts |
 | `--algo` | `ppo` | RL algorithm (`ppo` or `sac`) |
@@ -103,6 +104,9 @@ defaults:
   timesteps: 2000000
   hidden_size: 64
   checkpoint_freq: 200000  # optional, defaults to timesteps/10
+  max_threads: 1           # optional, caps CPU threads/exp (else half-cores auto-split)
+  env_kwargs:              # optional, forwarded to gym.make
+    terminate_when_unhealthy: false
 
 experiments:
   - name: fast_ant
@@ -117,6 +121,12 @@ experiments:
 ```
 
 The `defaults` section provides base values that individual experiments can override.
+
+`env_kwargs` is forwarded verbatim to `gym.make(env_id, **env_kwargs)`. Note that
+these kwargs are env-specific: e.g. `terminate_when_unhealthy` is an Ant flag and
+will raise on HalfCheetah, which has no "unhealthy" state. Use it to keep
+episodes running to the time limit (otherwise an Ant that falls over ends its
+episode immediately, starving low-speed targets of training data).
 
 ### Merge
 
@@ -151,8 +161,8 @@ python -m nn_merge.evaluate --model models/ant-v5_seed0 --record
 | `--render` | off | Live GUI rendering (requires display) |
 | `--record` | off | Save MP4 videos to `--video-dir` |
 | `--video-dir` | auto | Directory for videos (defaults to `<model>_eval_videos/`) |
-| `--no-early-termination` | off | Disable healthy checks (let agent run to time limit) |
 | `--reward-kwargs` | none | Override reward params (e.g. `speed_target=1.5`) |
+| `--env-kwargs` | none | Kwargs passed to `gym.make` (e.g. `terminate_when_unhealthy=False`) |
 | `--gpu` | none | Explicitly set GPU for evaluation |
 | `--seed` | `0` | Eval environment seed (observation noise) |
 | `--cache` | `models/eval_cache.json` | Path to evaluation cache |

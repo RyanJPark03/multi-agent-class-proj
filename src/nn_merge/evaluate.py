@@ -37,12 +37,11 @@ def main():
     parser.add_argument("--video-dir", type=str, default=None,
                         help="Directory to save recorded videos "
                              "(default: <model_dir>/<model_stem>_eval_videos)")
-    parser.add_argument("--no-early-termination", action="store_true",
-                        help="Disable terminate_when_unhealthy so episodes run "
-                             "to the time limit (useful for fast/unstable policies)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--reward-kwargs", nargs="*", default=[],
                         help="Reward kwargs (e.g., speed_target=1.5)")
+    parser.add_argument("--env-kwargs", nargs="*", default=[],
+                        help="Kwargs passed to gym.make (e.g. terminate_when_unhealthy=False)")
     parser.add_argument("--cache", type=str, default=DEFAULT_CACHE_PATH)
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--gpu", type=str, default=None)
@@ -57,16 +56,17 @@ def main():
         args.video_dir = str(model_path.parent / (model_path.stem + "_eval_videos"))
 
     def _parse_val(v):
+        if isinstance(v, str):
+            if v.lower() == "true": return True
+            if v.lower() == "false": return False
+            if v.lower() in ("none", "null"): return None
         try:
             if "." in v: return float(v)
             return int(v)
         except ValueError: return v
 
     reward_kwargs = {kv.split("=", 1)[0]: _parse_val(kv.split("=", 1)[1]) for kv in args.reward_kwargs}
-
-    env_kwargs = {}
-    if args.no_early_termination:
-        env_kwargs["terminate_when_unhealthy"] = False
+    env_kwargs = {kv.split("=", 1)[0]: _parse_val(kv.split("=", 1)[1]) for kv in args.env_kwargs}
 
     if args.render:
         env_kwargs["render_mode"] = "human"

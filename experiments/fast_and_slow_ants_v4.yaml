@@ -5,6 +5,8 @@ defaults:
   algo: sac
   device: cuda:0
   gpu: 2
+  env_kwargs:
+    terminate_when_unhealthy: false
 
 experiments:
   - name: fast_ant_1.0

@@ -112,7 +112,7 @@ class HealthyV5Clone(gym.RewardWrapper):
 
 class HalfCheetahForwardTarget(gym.RewardWrapper):
     def __init__(self, env, speed_target: float = 2.0, control_penalty: float = 0.1,
-                 upright_weight: float = 1.0):
+                 upright_weight: float = 0.3):
         super().__init__(env)
         self.speed_target = speed_target
         self.control_penalty = control_penalty
@@ -121,11 +121,12 @@ class HalfCheetahForwardTarget(gym.RewardWrapper):
     def step(self, action):
         obs, _, terminated, truncated, info = self.env.step(action)
         forward_velocity = info.get("x_velocity", 0.0)
-        speed_reward = -(forward_velocity - self.speed_target)**2
+        speed_reward = max(0.0, 1.0 - abs(forward_velocity - self.speed_target) / max(self.speed_target, 0.1))
         control_cost = self.control_penalty * np.sum(np.square(action))
         pitch = float(self.unwrapped.data.qpos[2])
         upright_reward = self.upright_weight * np.cos(pitch) if abs(pitch) > 0.98 else 0
-        return speed_reward - control_cost + upright_reward
+        reward = speed_reward - control_cost + upright_reward
+        return obs, reward, terminated, truncated, info
 
 class ForwardReward(gym.RewardWrapper):
     """Reward only forward (positive x) velocity. No survival bonus, no penalties."""

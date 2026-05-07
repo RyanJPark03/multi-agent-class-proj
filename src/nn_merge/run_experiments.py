@@ -50,6 +50,11 @@ def build_train_command(experiment: dict, defaults: dict, output_dir: str) -> li
         kv_pairs = [f"{k}={v}" for k, v in reward_kwargs.items()]
         cmd.extend(["--reward-kwargs"] + kv_pairs)
 
+    env_kwargs = cfg.get("env_kwargs", {})
+    if env_kwargs:
+        kv_pairs = [f"{k}={v}" for k, v in env_kwargs.items()]
+        cmd.extend(["--env-kwargs"] + kv_pairs)
+
     if cfg.get("wandb_project"):
         cmd.extend(["--wandb-project", cfg["wandb_project"]])
     if cfg.get("run_name"):
@@ -132,6 +137,8 @@ def main():
                         help="Path(s) to YAML experiment config(s)")
     parser.add_argument("--max-parallel", type=int, default=None,
                         help="Max concurrent experiments (default: total number of experiments)")
+    parser.add_argument("--max-threads", type=int, default=None,
+                        help="Cap CPU threads per experiment (overrides yaml defaults.max_threads)")
     parser.add_argument("--verbose", action="store_true",
                         help="Show full SB3 training output")
     args = parser.parse_args()
@@ -142,11 +149,14 @@ def main():
     all_jobs: list[tuple[str, list[str]]] = []  # (label, cmd)
     all_devices_list: list[str] = []
     all_gpu_pins: list[str | None] = []  # explicit gpu index from yaml, else None
+    yaml_max_threads: list[int] = []
     for config_path in args.config:
         with open(config_path) as f:
             config = yaml.safe_load(f)
 
         defaults = config.get("defaults", {})
+        if "max_threads" in defaults:
+            yaml_max_threads.append(int(defaults["max_threads"]))
         experiments = config["experiments"]
 
         config_stem = Path(config_path).stem
@@ -168,6 +178,13 @@ def main():
     # Limit CPU: half the cores, split evenly across concurrent experiments
     total_cpus = os.cpu_count() or 1
     threads_per_exp = max(1, total_cpus // 2 // max_parallel)
+
+    # Apply max_threads cap (CLI > yaml defaults). Most-conservative across configs.
+    max_threads_cap = args.max_threads if args.max_threads is not None else (
+        min(yaml_max_threads) if yaml_max_threads else None
+    )
+    if max_threads_cap is not None:
+        threads_per_exp = max(1, min(threads_per_exp, max_threads_cap))
 
     # Assign GPUs round-robin (only if any experiment uses cuda without an explicit pin)
     needs_auto_gpu = any(

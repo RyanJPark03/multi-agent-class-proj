@@ -72,6 +72,8 @@ def main():
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--no-wandb", action="store_true")
     parser.add_argument("--reward-kwargs", nargs="*", default=[])
+    parser.add_argument("--env-kwargs", nargs="*", default=[],
+                        help="Kwargs passed to gym.make (e.g. terminate_when_unhealthy=False)")
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--algo", type=str, default="ppo", choices=["ppo", "sac"])
     parser.add_argument("--dinno", action="store_true")
@@ -86,6 +88,7 @@ def main():
         print(f"Setting CUDA_VISIBLE_DEVICES to: {args.gpu}")
 
     reward_kwargs = {kv.split("=", 1)[0]: _parse_val(kv.split("=", 1)[1]) for kv in args.reward_kwargs}
+    env_kwargs = {kv.split("=", 1)[0]: _parse_val(kv.split("=", 1)[1]) for kv in args.env_kwargs}
 
     save_path = args.save_path or f"models/{args.env_id.lower()}_seed{args.seed}"
     Path(save_path).parent.mkdir(parents=True, exist_ok=True)
@@ -98,9 +101,8 @@ def main():
         if "speed_target" not in reward_kwargs:
             reward_kwargs["speed_target"] = 0.5
         
-        env_kwargs = {"terminate_when_unhealthy": False}
         env = make_env(args.env_id, args.reward, env_kwargs=env_kwargs, **reward_kwargs)
-        
+
         if use_wandb:
             import wandb
             wandb.init(
@@ -167,8 +169,8 @@ def train_worker(agent_idx, args, device, target_speed, shared_registry, save_pa
     
     reward_kwargs = {kv.split("=", 1)[0]: _parse_val(kv.split("=", 1)[1]) for kv in args.reward_kwargs}
     reward_kwargs["speed_target"] = target_speed
+    env_kwargs = {kv.split("=", 1)[0]: _parse_val(kv.split("=", 1)[1]) for kv in args.env_kwargs}
 
-    env_kwargs = {"terminate_when_unhealthy": False}
     env = make_env(args.env_id, args.reward, env_kwargs=env_kwargs, **reward_kwargs)
     config = DiNNOConfig()
     
@@ -239,8 +241,12 @@ def _get_callbacks(args, use_wandb, save_path, prefix=""):
     return callbacks
 
 def _parse_val(v):
+    if isinstance(v, str):
+        if v.lower() == "true": return True
+        if v.lower() == "false": return False
+        if v.lower() in ("none", "null"): return None
     try: return float(v)
-    except ValueError: return v
+    except (ValueError, TypeError): return v
 
 def _create_model(args, env, device):
     if args.algo == "ppo":
