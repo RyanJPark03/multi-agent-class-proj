@@ -1,0 +1,17 @@
+defaults:
+  env_id: HalfCheetah-v5
+  timesteps: 2000000
+  hidden_size: 64
+  algo: sac
+  device: cpu
+  max_threads: 4
+
+experiments:
+  - name: centralized
+    reward: half_cheetah_dynamic_tgt
+    reward_kwargs:
+      target1: 1.5
+      target2: 3.0
+      switch_step: 500
+      upright_weight: 0.6
+    seed: 0
