@@ -23,7 +23,9 @@ from nn_merge.eval_cache import (
 def main():
     load_dotenv()
     if "MUJOCO_GL" not in os.environ:
-        os.environ["MUJOCO_GL"] = "egl"
+        # osmesa (software) is the safest default for headless boxes; egl segfaults
+        # on machines without working GPU drivers. Override via env var if you want egl.
+        os.environ["MUJOCO_GL"] = "osmesa"
 
     parser = argparse.ArgumentParser(description="Evaluate a trained model")
     parser.add_argument("--model", type=str, default="models/fast_and_slow_ants/fast_ant.zip")

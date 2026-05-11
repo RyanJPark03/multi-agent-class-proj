@@ -110,13 +110,25 @@ class HealthyV5Clone(gym.RewardWrapper):
         reward = speed_reward - torque_cost + contact_reward + healthy_reward
         return obs, reward, terminated, truncated, info
 
-class HalfCheetahForwardTarget(gym.RewardWrapper):
+class HalfCheetahForwardTarget(gym.Wrapper):
     def __init__(self, env, speed_target: float = 2.0, control_penalty: float = 0.1,
                  upright_weight: float = 0.3):
         super().__init__(env)
         self.speed_target = speed_target
         self.control_penalty = control_penalty
         self.upright_weight = upright_weight
+
+        if isinstance(self.observation_space, gym.spaces.Box):
+            low = np.append(self.observation_space.low, -np.inf)
+            high = np.append(self.observation_space.high, np.inf)
+            self.observation_space = gym.spaces.Box(low, high, dtype=np.float32)
+
+    def _get_obs(self, obs):
+        return np.append(obs, self.speed_target)
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        return self._get_obs(obs), info
 
     def step(self, action):
         obs, _, terminated, truncated, info = self.env.step(action)
@@ -126,7 +138,35 @@ class HalfCheetahForwardTarget(gym.RewardWrapper):
         pitch = float(self.unwrapped.data.qpos[2])
         upright_reward = self.upright_weight * np.cos(pitch) if abs(pitch) > 0.98 else 0
         reward = speed_reward - control_cost + upright_reward
+        return self._get_obs(obs), reward, terminated, truncated, info
+
+
+class HalfCheetahDynamicTarget(HalfCheetahForwardTarget):
+    """Switches between two target speeds at a specific step count.
+
+    Mirrors DynamicTarget for HalfCheetah. The policy sees the current target
+    in obs[-1], so a single net learns both modes.
+    """
+    def __init__(self, env, target1: float = 1.5, target2: float = 3.0,
+                 switch_step: int = 500, **kwargs):
+        kwargs.pop("speed_target", None)  # target1 governs the initial target
+        super().__init__(env, speed_target=target1, **kwargs)
+        self.target1 = target1
+        self.target2 = target2
+        self.switch_step = int(switch_step)
+        self.current_step = 0
+
+    def step(self, action):
+        if self.current_step >= self.switch_step:
+            self.speed_target = self.target2
+        obs, reward, terminated, truncated, info = super().step(action)
+        self.current_step += 1
         return obs, reward, terminated, truncated, info
+
+    def reset(self, **kwargs):
+        self.current_step = 0
+        self.speed_target = self.target1
+        return super().reset(**kwargs)
 
 class ForwardReward(gym.RewardWrapper):
     """Reward only forward (positive x) velocity. No survival bonus, no penalties."""
@@ -176,6 +216,7 @@ class DynamicTarget(ForwardTarget):
     dynamically adapt its behavior mid-episode.
     """
     def __init__(self, env, target1: float = 0.5, target2: float = 1.5, switch_step: int = 500, **kwargs):
+        kwargs.pop("speed_target", None)  # target1 governs the initial target
         super().__init__(env, speed_target=target1, **kwargs)
         self.target1 = target1
         self.target2 = target2
@@ -183,7 +224,7 @@ class DynamicTarget(ForwardTarget):
         self.current_step = 0
 
     def step(self, action):
-        # Update speed_target before calling super().step() so the observation 
+        # Update speed_target before calling super().step() so the observation
         # (which appends speed_target) reflects the new goal immediately.
         if self.current_step >= self.switch_step:
             self.speed_target = self.target2
@@ -204,5 +245,6 @@ REWARDS: dict[str, type[gym.Wrapper]] = {
     "energy_efficient": EnergyEfficientReward,
     "forward_target": ForwardTarget,
     "dynamic_target": DynamicTarget,
-    "half_cheetah_fwd_tgt": HalfCheetahForwardTarget
+    "half_cheetah_fwd_tgt": HalfCheetahForwardTarget,
+    "half_cheetah_dynamic_tgt": HalfCheetahDynamicTarget,
 }

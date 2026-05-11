@@ -41,6 +41,15 @@ plt.rcParams.update({
     "mathtext.fontset": "stix",
 })
 
+LINE_PLOT_RC = {
+    "font.size": 42,
+    "axes.titlesize": 44,
+    "axes.labelsize": 42,
+    "xtick.labelsize": 36,
+    "ytick.labelsize": 36,
+    "legend.fontsize": 36,
+}
+
 
 def _load_model(path: str, device: str = "cpu") -> BaseAlgorithm:
     """Load an SB3 model, auto-detecting the algorithm from the saved zip."""
@@ -156,48 +165,49 @@ def save_split_line_plot(
     base = Path(output_path)
     figures = [
         (slow + merged_0, f"Slow ant vs merged ({env_id})",
-         base.with_name(f"{base.stem}_slow{base.suffix}"),
+         base.with_name(f"{base.stem}_slow.pdf"),
          ["#1f77b4", "#ff7f0e"]),  # blue + orange
         (fast + merged_1, f"Fast ant vs merged ({env_id})",
-         base.with_name(f"{base.stem}_fast{base.suffix}"),
+         base.with_name(f"{base.stem}_fast.pdf"),
          ["#2ca02c", "#d62728"]),  # green + red
     ]
 
-    for groups, title, out_path, palette in figures:
-        if not groups:
-            print(f"  Skipping split plot {out_path.name}: no matching groups.")
-            continue
-        fig, ax = plt.subplots(figsize=(8, 5))
-        for i, group in enumerate(groups):
-            means, stds = [], []
-            for lbl in reward_labels:
-                rs = results[lbl].get(group, [])
-                if rs:
-                    means.append(float(np.mean(rs)))
-                    stds.append(float(np.std(rs)))
-                else:
-                    means.append(np.nan)
-                    stds.append(0.0)
-            means = np.array(means)
-            stds = np.array(stds)
-            color = palette[i % len(palette)]
-            ax.plot(xs, means, marker="o", color=color, label=group, linewidth=2)
-            ax.fill_between(xs, means - stds, means + stds, color=color, alpha=0.15)
+    with plt.rc_context(LINE_PLOT_RC):
+        for groups, title, out_path, palette in figures:
+            if not groups:
+                print(f"  Skipping split plot {out_path.name}: no matching groups.")
+                continue
+            fig, ax = plt.subplots(figsize=(16, 10))
+            for i, group in enumerate(groups):
+                means, stds = [], []
+                for lbl in reward_labels:
+                    rs = results[lbl].get(group, [])
+                    if rs:
+                        means.append(float(np.mean(rs)))
+                        stds.append(float(np.std(rs)))
+                    else:
+                        means.append(np.nan)
+                        stds.append(0.0)
+                means = np.array(means)
+                stds = np.array(stds)
+                color = palette[i % len(palette)]
+                ax.plot(xs, means, marker="o", color=color, label=group, linewidth=4, markersize=14)
+                ax.fill_between(xs, means - stds, means + stds, color=color, alpha=0.15)
 
-        ax.set_xlabel(x_kwarg)
-        ax.set_ylabel("Mean episode reward")
-        ax.set_title(title)
-        ax.set_xticks(xs)
-        ax.grid(False)
-        ax.legend(loc="best", frameon=False)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        fig.tight_layout()
+            ax.set_xlabel(x_kwarg)
+            ax.set_ylabel("Mean episode reward")
+            ax.set_title(title)
+            ax.set_xticks(xs)
+            ax.grid(False)
+            ax.legend(loc="best", frameon=False)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            fig.tight_layout()
 
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(out_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        print(f"Split line plot saved to {out_path}")
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(out_path, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            print(f"Split line plot saved to {out_path}")
 
 
 def main():
@@ -372,39 +382,41 @@ def main():
                 key=lambda k: (k.startswith("merged"), k),
             )
 
-            fig, ax = plt.subplots(figsize=(8, 5))
-            cmap = plt.get_cmap("tab10")
-            for i, group in enumerate(all_groups):
-                means, stds = [], []
-                for lbl in reward_labels:
-                    rs = results[lbl].get(group, [])
-                    if rs:
-                        means.append(float(np.mean(rs)))
-                        stds.append(float(np.std(rs)))
-                    else:
-                        means.append(np.nan)
-                        stds.append(0.0)
-                means = np.array(means)
-                stds = np.array(stds)
-                color = cmap(i % 10)
-                ax.plot(xs, means, marker="o", color=color, label=group, linewidth=2)
-                ax.fill_between(xs, means - stds, means + stds, color=color, alpha=0.15)
+            with plt.rc_context(LINE_PLOT_RC):
+                fig, ax = plt.subplots(figsize=(16, 10))
+                cmap = plt.get_cmap("tab10")
+                for i, group in enumerate(all_groups):
+                    means, stds = [], []
+                    for lbl in reward_labels:
+                        rs = results[lbl].get(group, [])
+                        if rs:
+                            means.append(float(np.mean(rs)))
+                            stds.append(float(np.std(rs)))
+                        else:
+                            means.append(np.nan)
+                            stds.append(0.0)
+                    means = np.array(means)
+                    stds = np.array(stds)
+                    color = cmap(i % 10)
+                    ax.plot(xs, means, marker="o", color=color, label=group,
+                            linewidth=4, markersize=14)
+                    ax.fill_between(xs, means - stds, means + stds,
+                                    color=color, alpha=0.15)
 
-            ax.set_xlabel(args.x_kwarg)
-            ax.set_ylabel("Mean episode reward")
-            ax.set_title(f"Performance vs {args.x_kwarg} ({args.env_id})")
-            ax.grid(False)
-            ax.legend(loc="best", frameon=False)
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)       
-            fig.tight_layout()
+                ax.set_xlabel(args.x_kwarg)
+                ax.set_ylabel("Mean episode reward")
+                ax.set_title(f"Performance vs {args.x_kwarg} ({args.env_id})")
+                ax.set_xticks(xs)
+                ax.grid(False)
+                ax.legend(loc="best", frameon=False)
+                ax.spines["top"].set_visible(False)
+                ax.spines["right"].set_visible(False)
+                fig.tight_layout()
 
-            
-
-            Path(args.line_output).parent.mkdir(parents=True, exist_ok=True)
-            fig.savefig(args.line_output, dpi=150, bbox_inches="tight")
-            plt.close(fig)
-            print(f"Line plot saved to {args.line_output}")
+                Path(args.line_output).parent.mkdir(parents=True, exist_ok=True)
+                fig.savefig(args.line_output, dpi=150, bbox_inches="tight")
+                plt.close(fig)
+                print(f"Line plot saved to {args.line_output}")
 
     if args.split_line_output:
         xy_specs = [(kw, lbl) for _, kw, lbl in reward_specs if args.x_kwarg in kw]

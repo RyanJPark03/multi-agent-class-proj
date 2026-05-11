@@ -77,11 +77,20 @@ def main():
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--algo", type=str, default="ppo", choices=["ppo", "sac"])
     parser.add_argument("--dinno", action="store_true")
-    
+    parser.add_argument("--dinno-targets", nargs="+", type=float, default=[0.5, 1.5],
+                        help="Target speeds for each DiNNO agent (one per agent).")
+    parser.add_argument("--rho-schedule-steps", type=int, default=None,
+                        help="Steps over which rho ramps from rho_init to rho_final. "
+                             "Defaults to timesteps // 10 so the schedule shape stays "
+                             "consistent across training budgets.")
+
     # CHANGED: We now take a SINGLE base model to prevent the permutation mismatch problem
     parser.add_argument("--load-base-model", type=str, default=None,
                         help="Path to a single pretrained baseline model to initialize BOTH agents.")
     args = parser.parse_args()
+
+    if args.rho_schedule_steps is None:
+        args.rho_schedule_steps = max(1, args.timesteps // 10)
     
     if args.gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
@@ -129,11 +138,11 @@ def main():
         shared_registry = manager.dict()
 
         # Both agents MUST start with the same initialization to avoid permutation collapse.
-        # If args.load_base_model is provided via CLI, it will be used for both. 
+        # If args.load_base_model is provided via CLI, it will be used for both.
         # Otherwise, they will initialize with the same random weights due to shared seeding.
         agent_configs = [
-            {"agent_idx": 0, "target_speed": 0.5, "load_model": args.load_base_model},
-            {"agent_idx": 1, "target_speed": 1.5, "load_model": args.load_base_model},
+            {"agent_idx": i, "target_speed": float(t), "load_model": args.load_base_model}
+            for i, t in enumerate(args.dinno_targets)
         ]
 
         gpu_ids = os.environ.get("CUDA_VISIBLE_DEVICES", "0").split(",")
@@ -173,16 +182,17 @@ def train_worker(agent_idx, args, device, target_speed, shared_registry, save_pa
 
     env = make_env(args.env_id, args.reward, env_kwargs=env_kwargs, **reward_kwargs)
     config = DiNNOConfig()
-    
+    config.rho_schedule_steps = args.rho_schedule_steps
+
     # CRITICAL FIX: target_params MUST be "actor". Never apply consensus to the Critic
     # when the agents have different reward functions.
     cb_dinno = DiNNOCallback(
-        node_id=agent_name, 
-        target_params="actor", 
+        node_id=agent_name,
+        target_params="actor",
         rho_init=config.rho_init,
         rho_final=config.rho_final,
         rho_schedule_steps=config.rho_schedule_steps,
-        registry=shared_registry, 
+        registry=shared_registry,
         communication_freq=config.communication_freq
     )
     
